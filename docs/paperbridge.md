@@ -64,9 +64,12 @@ that field unknown rather than assuming what a custom provider downloaded.
 operator-enabled subscription search. The current experimental route targets
 ProQuest records. Results are titles, dates, authors, snippets and any DOI
 actually present. They are metadata, not downloaded documents. Year and
-peer-review filters apply conservatively to one visible results page. Unsupported
+peer-review filters apply conservatively to the first results page. The parser
+reads a bounded HTML response from the authenticated browser session. Unsupported
 page layouts and human checks produce explicit failures. Authenticated results
 must be verified in the operator's actual account before relying on this route.
+The stream deadline is checked between reads. Stalled browser commands remain
+subject to the shared browser runner's timeout and busy-session handling.
 
 The subscription route stores its request budget and short-lived result cache
 in the private archive. The UTC budget is 30 submitted searches per day, with

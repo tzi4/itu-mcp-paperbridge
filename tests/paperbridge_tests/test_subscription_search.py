@@ -1,8 +1,8 @@
 """Offline browser contract tests. No live browser, accounts, or sessions used.
 
-Result HTML below documents the deliberately limited supported DOM contract.
-It is synthetic. Public search-form and directory markup was inspected, while
-authenticated ProQuest result markup still requires independent live validation.
+Result HTML is synthetic and follows the supported subscriber metadata shape.
+The fake CDP models native request pauses and bounded response-body streaming,
+including aborting the results navigation before renderer execution.
 """
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ import os
 import tempfile
 import unittest
 import zlib
+from itertools import repeat
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -28,7 +29,7 @@ from paperbridge.openathens import OpenAthensCredentials
 from paperbridge.research_resources import DIRECTORY_API_URL
 from paperbridge.subscription_search import (
     ACS, CACHE_ENTRIES, CACHE_SECONDS, CENTRAL, DAILY_REQUESTS, DIRECTORY,
-    ENTITY, MAX_RESULTS, REQUEST_INTERVAL, SP_HOST, SP_TARGET,
+    ENTITY, MAX_RESULTS, REQUEST_INTERVAL, RESPONSE_BYTES, STREAM_CHUNK_BYTES, SP_HOST, SP_TARGET,
     SubscriptionSearch, _Routes, _check_authn_request, _results, _url,
 )
 
@@ -133,6 +134,7 @@ class FakeLocator:
     def click(self, **kwargs):
         p = self.page
         if 'button[name="logIn"]' == self.selector:
+            assert not kwargs.get("no_wait_after")
             body = urlencode({"username": p.fills['input[name="username"]:visible'],
                               "password": p.fills['input[name="password"]:visible']})
             p.request(p.context.login_target, "POST", body)
@@ -143,12 +145,17 @@ class FakeLocator:
             else:
                 p.url, p.html = "https://www.proquest.com/central", SEARCH_FORM
         elif "expandedSearch" in self.selector:
+            assert kwargs.get("no_wait_after") is True
             p.request(ACTION, "POST", urlencode({"searchTerm": p.fills[self.selector.replace(
                 "a#expandedSearch", "textarea#searchTerm")]}))
             if p.context.duplicate_search:
                 p.request(ACTION, "POST", "searchTerm=again")
-            p.url = "https://www.proquest.com/results/fixture"
-            p.html = p.context.results
+            p.url = "https://www.proquest.com/results/fixture/1"
+            response = p.request(p.url)
+            if not p.context.delay_response:
+                p.context.session.respond(response)
+            else:
+                p.context.pending_response = response
         else:
             raise AssertionError(self.selector)
 
@@ -206,15 +213,21 @@ class FakePage:
             raise RuntimeError("No selector at private URL")
 
     def wait_for_timeout(self, delay):
-        pass
+        if self.context.pending_response is not None:
+            response, self.context.pending_response = self.context.pending_response, None
+            self.context.session.respond(response)
 
     def wait_for_load_state(self, state, **kwargs):
         pass
 
     def content(self):
+        if "/results/" in self.url:
+            raise AssertionError("Results must come from the native response, not the renderer")
         return self.html
 
     def title(self):
+        if "/results/" in self.url:
+            raise AssertionError("Do not query the aborted results renderer")
         return self.context.title
 
     def close(self):
@@ -238,6 +251,12 @@ class FakeContext:
         self.repeat_login = self.duplicate_search = False
         self.direct_form = False
         self.guest_form = False
+        self.delay_response = False
+        self.pending_response = None
+        self.capture_status = 200
+        self.capture_headers = [{"name": "Content-Type", "value": "text/html; charset=UTF-8"}]
+        self.capture_chunks = None
+        self.capture_errors = {}
 
     def new_page(self):
         page = FakePage(self)
@@ -263,6 +282,10 @@ class FakeCDP:
         self.callback = None
         self.requests = {}
         self.commands = []
+        self.stream_body = b""
+        self.stream_offset = 0
+        self.stream_chunks = None
+        self.detached = False
 
     def on(self, event, callback):
         assert event == "Fetch.requestPaused"
@@ -277,8 +300,20 @@ class FakeCDP:
                                    "hasPostData": request.post_data is not None,
                                    **({"postData": request.post_data} if request.post_data is not None else {})}})
 
+    def respond(self, route, *, status=None, headers=None, body=None):
+        request_id = next(key for key, value in self.requests.items() if value is route)
+        self.stream_body = (self.context.results.encode("utf-8") if body is None else body)
+        self.stream_offset = 0
+        self.stream_chunks = iter(self.context.capture_chunks) if self.context.capture_chunks is not None else None
+        self.callback({"requestId": request_id, "frameId": "main-frame", "resourceType": "Document",
+                       "request": {"url": route.request.url, "method": route.request.method},
+                       "responseStatusCode": self.context.capture_status if status is None else status,
+                       "responseHeaders": self.context.capture_headers if headers is None else headers})
+
     def send(self, method, arguments=None):
         self.commands.append((method, arguments))
+        if method in self.context.capture_errors:
+            raise self.context.capture_errors[method]
         if method == "Page.getFrameTree":
             return {"frameTree": {"frame": {"id": "main-frame"}}}
         if method == "Fetch.enable":
@@ -287,9 +322,23 @@ class FakeCDP:
             self.requests[arguments["requestId"]].continue_()
         elif method == "Fetch.failRequest":
             self.requests[arguments["requestId"]].abort()
+        elif method == "Fetch.takeResponseBodyAsStream":
+            return {"stream": "synthetic-results-stream"}
+        elif method == "IO.read":
+            assert arguments["handle"] == "synthetic-results-stream"
+            assert arguments["size"] == STREAM_CHUNK_BYTES
+            if self.stream_chunks is not None:
+                return next(self.stream_chunks)
+            data = self.stream_body[self.stream_offset:self.stream_offset + arguments["size"]]
+            self.stream_offset += len(data)
+            return {"data": base64.b64encode(data).decode("ascii"), "base64Encoded": True,
+                    "eof": self.stream_offset == len(self.stream_body)}
+        elif method == "IO.close":
+            assert arguments["handle"] == "synthetic-results-stream"
 
     def detach(self):
         self.context.handler = None
+        self.detached = True
 
 
 class FakeRunner:
@@ -399,6 +448,53 @@ class SubscriptionSearchTests(unittest.TestCase):
         self.assertEqual(result["results"][0]["proquest_id"], "700001")
         self.assertEqual(self.state()["count"], 1)
         self.assertFalse(result["full_text_read"])
+
+    def test_captured_response_status_type_and_challenge_fail_without_cache_or_second_post(self):
+        cases = [
+            (503, [{"name": "Content-Type", "value": "text/html"}], RESULTS,
+             "library_search_response_status_rejected"),
+            (200, [{"name": "Content-Type", "value": "application/json"}], RESULTS,
+             "library_search_response_type_rejected"),
+            (200, [{"name": "Content-Type", "value": "text/html"}],
+             '<title>Verify you are human</title>' + RESULTS, "library_search_human_interaction_required"),
+        ]
+        for index, (status, headers, html, reason) in enumerate(cases):
+            with self.subTest(reason=reason):
+                self.runner.context.capture_status = status
+                self.runner.context.capture_headers = headers
+                self.runner.context.results = html
+                before = len(self.runner.context.requests)
+                self.reason(reason, lambda: self.searcher().search(f"response failure {index}"))
+                requests = self.runner.context.requests[before:]
+                submitted = [r for r in requests if r.sent and r.request.url == ACTION]
+                self.assertEqual(len(submitted), 1)
+                self.assertEqual(self.state()["count"], index + 1)
+                self.assertEqual(self.state()["cache"], {})
+                self.assertTrue(self.runner.context.pages[-1].closed)
+                self.assertTrue(self.runner.context.session.detached)
+                self.assertIsNone(self.runner.context.handler)
+                self.clock.advance()
+
+    def test_delayed_capture_uses_one_search_post_and_no_results_renderer(self):
+        self.runner.context.results = OBSERVED_RESULTS
+        self.runner.context.delay_response = True
+        steps = []
+        def wait(page, milliseconds):
+            if page.context.pending_response is not None:
+                steps.append(milliseconds)
+                if len(steps) == 2:
+                    response, page.context.pending_response = page.context.pending_response, None
+                    page.context.session.respond(response)
+        with patch.object(FakePage, "wait_for_timeout", wait), patch.object(
+                FakePage, "wait_for_selector", side_effect=AssertionError("No results renderer waits")):
+            result = self.searcher().search("slow native response")
+        self.assertEqual(result["count"], 2)
+        self.assertEqual(result["source"], "proquest_browser_response")
+        self.assertEqual(steps, [100, 100])
+        searches = [r for r in self.runner.context.requests if r.request.url == ACTION and r.request.method == "POST"]
+        self.assertEqual(len(searches), 1)
+        self.assertEqual(self.state()["count"], 1)
+        self.assertEqual(self.credential_calls, 1)
 
     def test_reused_session_does_not_repeat_institution_selection(self):
         self.runner.context.direct_form = True
@@ -634,6 +730,238 @@ class SubscriptionSearchTests(unittest.TestCase):
         self.assertEqual(self.credential_calls, 0)
 
 
+class ResponseCaptureTests(unittest.TestCase):
+    def capture(self, *, body=RESULTS.encode(), status=200, headers=None, chunks=None, errors=None):
+        context = FakeContext()
+        context.capture_chunks = chunks
+        context.capture_errors = errors or {}
+        page = context.new_page()
+        self.reservations = 0
+        def reserve():
+            self.reservations += 1
+        guard = _Routes(page, reserve)
+        guard.install(context)
+        self.addCleanup(guard.close, context)
+        guard.search_target = (ACTION, "POST")
+        page.request(ACTION, "POST", "searchTerm=synthetic")
+        response = page.request("https://www.proquest.com/results/synthetic/1")
+        context.session.respond(response, status=status, headers=headers, body=body)
+        return page, guard, response
+
+    def assert_cleanup(self, page, *, stream=True):
+        commands = page.context.session.commands
+        names = [name for name, _ in commands]
+        self.assertIn("Fetch.failRequest", names)
+        if stream:
+            self.assertEqual(names.count("IO.close"), 1)
+            self.assertLess(names.index("IO.close"), names.index("Fetch.failRequest"))
+        else:
+            self.assertNotIn("Fetch.takeResponseBodyAsStream", names)
+            self.assertNotIn("IO.close", names)
+        self.assertEqual(self.reservations, 1)
+
+    def test_native_stream_is_chunked_and_aborted_before_renderer_execution(self):
+        body = ("<title>Synthetic metadata</title>" + OBSERVED_RESULTS).encode()
+        page, guard, response = self.capture(body=body)
+        self.assertEqual(guard.result_html, body.decode())
+        self.assertIsNone(guard.reason)
+        self.assertTrue(response.sent)
+        self.assertTrue(response.aborted)
+        self.assert_cleanup(page)
+        names = [name for name, _ in page.context.session.commands]
+        self.assertNotIn("Fetch.getResponseBody", names)
+        self.assertNotIn("Fetch.fulfillRequest", names)
+        self.assertNotIn("Fetch.continueResponse", names)
+        self.assertEqual(names.count("Fetch.takeResponseBodyAsStream"), 1)
+        self.assertTrue(all(args["size"] == STREAM_CHUNK_BYTES for name, args in page.context.session.commands
+                            if name == "IO.read"))
+
+    def test_capture_rejects_http_errors_before_taking_stream(self):
+        for status in (201, 204, 400, 401, 403, 404, 429, 500, 503):
+            with self.subTest(status=status):
+                page, guard, _ = self.capture(status=status)
+                self.assertEqual(guard.reason, "library_search_response_status_rejected")
+                self.assertIsNone(guard.result_html)
+                self.assert_cleanup(page, stream=False)
+
+    def test_html_content_type_is_required_and_downloads_remain_blocked(self):
+        for value, reason in ((None, "library_search_response_type_rejected"),
+                              ("application/json", "library_search_response_type_rejected"),
+                              ("text/plain", "library_search_response_type_rejected"),
+                              ("application/xhtml+xml", "library_search_response_type_rejected"),
+                              ("application/pdf", "library_search_download_rejected")):
+            with self.subTest(value=value):
+                headers = [] if value is None else [{"name": "Content-Type", "value": value}]
+                page, guard, _ = self.capture(headers=headers)
+                self.assertEqual(guard.reason, reason)
+                self.assert_cleanup(page, stream=False)
+        page, guard, _ = self.capture(headers=[{"name": "Content-Type", "value": "TEXT/HTML; Charset=UTF-8"}])
+        self.assertIsNone(guard.reason)
+        self.assert_cleanup(page)
+        page, guard, _ = self.capture(headers=[{"name": "Content-Type", "value": "text/html"},
+                                              {"name": "Content-Disposition", "value": "attachment; filename=secret.html"}])
+        self.assertEqual(guard.reason, "library_search_download_rejected")
+        self.assert_cleanup(page, stream=False)
+
+    def test_two_megabyte_limit_is_enforced_on_streamed_bytes_even_if_length_lies(self):
+        page, guard, _ = self.capture(body=b" " * RESPONSE_BYTES)
+        self.assertIsNone(guard.reason)
+        self.assertEqual(len(guard.result_html.encode()), RESPONSE_BYTES)
+        self.assert_cleanup(page)
+        for length in (None, "1"):
+            headers = [{"name": "Content-Type", "value": "text/html"}]
+            if length is not None:
+                headers.append({"name": "Content-Length", "value": length})
+            page, guard, _ = self.capture(body=b" " * (RESPONSE_BYTES + 1), headers=headers)
+            self.assertEqual(guard.reason, "library_search_response_size_limit")
+            self.assertIsNone(guard.result_html)
+            self.assert_cleanup(page)
+        page, guard, _ = self.capture(headers=[{"name": "Content-Type", "value": "text/html"},
+                                              {"name": "Content-Length", "value": str(RESPONSE_BYTES + 1)}])
+        self.assertEqual(guard.reason, "library_search_response_size_limit")
+        self.assert_cleanup(page, stream=False)
+
+    def test_stream_accepts_text_or_base64_and_rejects_empty_or_malformed_chunks(self):
+        page, guard, _ = self.capture(chunks=[{"data": "<title>Synthetic</title>", "eof": False},
+                                             {"data": base64.b64encode(OBSERVED_RESULTS.encode()).decode(),
+                                              "base64Encoded": True, "eof": True}])
+        self.assertEqual(guard.result_html, "<title>Synthetic</title>" + OBSERVED_RESULTS)
+        self.assert_cleanup(page)
+        cases = [({"data": "", "eof": True}, "library_search_response_empty"),
+                 ({"data": "***", "base64Encoded": True, "eof": True}, "library_search_response_capture_unavailable"),
+                 ({"data": None, "eof": True}, "library_search_response_size_limit"),
+                 ({"data": "x" * (STREAM_CHUNK_BYTES + 1), "eof": True}, "library_search_response_size_limit"),
+                 ({"data": "é" * STREAM_CHUNK_BYTES, "eof": True}, "library_search_response_size_limit")]
+        for chunk, reason in cases:
+            with self.subTest(reason=reason, data_type=type(chunk["data"]).__name__):
+                page, guard, _ = self.capture(chunks=[chunk])
+                self.assertEqual(guard.reason, reason)
+                self.assertIsNone(guard.result_html)
+                self.assert_cleanup(page)
+
+    def test_stream_read_and_close_failures_are_sanitized_and_always_abort(self):
+        for method, error in (("IO.read", BrowserError("https://private.invalid/token")),
+                              ("IO.read", BrowserTimeout("private session")),
+                              ("IO.read", asyncio.CancelledError()),
+                              ("IO.close", RuntimeError("private stream"))):
+            with self.subTest(method=method, error=type(error).__name__):
+                page, guard, _ = self.capture(errors={method: error})
+                self.assertEqual(guard.reason, "library_search_response_capture_unavailable")
+                self.assertIsNone(guard.result_html)
+                self.assert_cleanup(page)
+                self.assertEqual(guard.pending, 0)
+                guard.close(page.context)
+                self.assertTrue(page.closed)
+                self.assertTrue(page.context.session.detached)
+        page, guard, _ = self.capture(errors={"Fetch.takeResponseBodyAsStream": RuntimeError("private target")})
+        self.assertEqual(guard.reason, "library_search_response_capture_unavailable")
+        names = [name for name, _ in page.context.session.commands]
+        self.assertIn("Fetch.failRequest", names)
+        self.assertNotIn("IO.close", names)
+
+    def test_stream_deadline_and_missing_eof_are_bounded(self):
+        context = FakeContext()
+        page = context.new_page()
+        guard = _Routes(page, lambda: None)
+        guard.install(context)
+        self.addCleanup(guard.close, context)
+        guard.search_sent = True
+        timer = Clock(0)
+        guard._stream_clock = timer
+        route = page.request("https://www.proquest.com/results/slow/1")
+        original = context.session.send
+        def slow_read(method, arguments=None):
+            if method == "IO.read":
+                timer.advance(25)
+            return original(method, arguments)
+        with patch.object(context.session, "send", side_effect=slow_read):
+            context.session.respond(route)
+        self.assertEqual(guard.reason, "library_search_response_timeout")
+        self.assertIsNone(guard.result_html)
+        names = [name for name, _ in context.session.commands]
+        self.assertIn("IO.close", names)
+        self.assertIn("Fetch.failRequest", names)
+
+    def test_missing_eof_stops_on_ticking_deadline_and_empty_reads_yield(self):
+        for payload in ("", "x"):
+            with self.subTest(empty=not payload):
+                context = FakeContext()
+                context.capture_chunks = repeat({"data": payload, "eof": False})
+                page = context.new_page()
+                self.reservations = 0
+                def reserve():
+                    self.reservations += 1
+                guard = _Routes(page, reserve)
+                guard.install(context)
+                self.addCleanup(guard.close, context)
+                guard.search_target = (ACTION, "POST")
+                page.request(ACTION, "POST", "searchTerm=synthetic")
+                route = page.request("https://www.proquest.com/results/no-eof/1")
+                timer = Clock(0)
+                guard._stream_clock = timer
+                original = context.session.send
+                def ticking_read(method, arguments=None):
+                    if method == "IO.read":
+                        timer.advance(1)
+                    return original(method, arguments)
+                waits = []
+                def yield_control(milliseconds):
+                    waits.append(milliseconds)
+                    timer.advance(milliseconds / 1000)
+                with patch.object(context.session, "send", side_effect=ticking_read), patch.object(
+                        page, "wait_for_timeout", side_effect=yield_control):
+                    context.session.respond(route)
+                self.assertEqual(guard.reason, "library_search_response_timeout")
+                self.assertIsNone(guard.result_html)
+                self.assertGreaterEqual(timer(), 25)
+                self.assertLess(timer(), 27)
+                reads = sum(name == "IO.read" for name, _ in context.session.commands)
+                self.assertGreater(reads, 0)
+                self.assertLess(reads, 100)
+                if payload:
+                    self.assertEqual(waits, [])
+                else:
+                    self.assertTrue(waits)
+                    self.assertTrue(all(milliseconds == 25 for milliseconds in waits))
+                self.assert_cleanup(page)
+
+    def test_many_short_chunks_are_accepted_within_byte_and_time_budget(self):
+        short = "<html><p>Synthetic</p></html>".ljust(33)
+        chunks = [{"data": character, "eof": index == len(short) - 1}
+                  for index, character in enumerate(short)]
+        page, guard, _ = self.capture(chunks=chunks)
+        self.assertIsNone(guard.reason)
+        self.assertEqual(guard.result_html, short)
+        self.assertEqual(sum(name == "IO.read" for name, _ in page.context.session.commands), 33)
+        self.assert_cleanup(page)
+
+        chunks = [{"data": OBSERVED_RESULTS[start:start + 8], "eof": start + 8 >= len(OBSERVED_RESULTS)}
+                  for start in range(0, len(OBSERVED_RESULTS), 8)]
+        self.assertGreater(len(chunks), 33)
+        page, guard, _ = self.capture(chunks=chunks)
+        self.assertIsNone(guard.reason)
+        self.assertEqual(guard.result_html, OBSERVED_RESULTS)
+        records = _results(BeautifulSoup(guard.result_html, "html.parser"), year_from=None,
+                           year_to=None, reviewed_only=False, limit=10)
+        self.assertEqual([record["proquest_id"] for record in records], ["700001", "700002"])
+        self.assert_cleanup(page)
+
+    def test_one_capture_per_search_and_redirect_responses_do_not_consume_stream(self):
+        page, guard, _ = self.capture(status=302, headers=[{"name": "Location", "value": "/results/final/1"}])
+        self.assertIsNone(guard.result_html)
+        self.assertFalse(guard.capture_started)
+        route = page.request("https://www.proquest.com/results/final/1")
+        page.context.session.respond(route, body=OBSERVED_RESULTS.encode())
+        self.assertEqual(guard.result_html, OBSERVED_RESULTS)
+        another = page.request("https://www.proquest.com/results/duplicate/1")
+        page.context.session.respond(another, body=RESULTS.encode())
+        self.assertEqual(guard.result_html, OBSERVED_RESULTS)
+        self.assertTrue(another.aborted)
+        self.assertEqual(sum(name == "Fetch.takeResponseBodyAsStream" for name, _ in page.context.session.commands), 1)
+        self.assertEqual(self.reservations, 1)
+        self.assertEqual(sum(r.sent and r.request.method == "POST" for r in page.context.requests), 1)
+
+
 class RouteAndDOMTests(unittest.TestCase):
     def guard(self):
         context = FakeContext()
@@ -665,6 +993,61 @@ class RouteAndDOMTests(unittest.TestCase):
             with self.assertRaises(BrowserError):
                 SubscriptionSearch._dom(page, guard)
         self.assertEqual(read.call_count, 1)
+
+    def test_results_poll_ignores_stale_renderer_until_native_response_arrives(self):
+        page, guard = self.guard()
+        guard.search_sent = True
+        timer = Clock(0)
+        filters = dict(year_from=None, year_to=None, reviewed_only=False, limit=10)
+        page.url, page.html = "https://www.proquest.com/central", SEARCH_FORM
+        waits = []
+        def wait(milliseconds):
+            timer.advance(milliseconds / 1000)
+            waits.append(milliseconds)
+            if len(waits) == 3:
+                guard.result_html = OBSERVED_RESULTS
+        page.wait_for_timeout = wait
+        with patch.object(page, "content", side_effect=AssertionError("No renderer reads")), patch.object(
+                page, "wait_for_selector", side_effect=AssertionError("No selector waits")):
+            results = SubscriptionSearch._poll_results(page, guard, filters, clock=timer)
+        self.assertEqual(len(results), 2)
+        self.assertEqual(waits, [100, 100, 100])
+        self.assertEqual(results[0]["proquest_id"], "700001")
+
+    def test_results_poll_stops_immediately_on_challenge_or_guard_rejection(self):
+        filters = dict(year_from=None, year_to=None, reviewed_only=False, limit=10)
+        page, guard = self.guard()
+        page.url, page.html = "https://www.proquest.com/results/synthetic/1", OBSERVED_RESULTS
+        guard.search_sent = True
+        guard.result_html = "<title>Verify you are human</title>" + OBSERVED_RESULTS
+        with patch.object(page, "wait_for_timeout") as wait:
+            with self.assertRaises(RetrievalUnavailable) as caught:
+                SubscriptionSearch._poll_results(page, guard, filters)
+        self.assertEqual(caught.exception.reason, "library_search_human_interaction_required")
+        wait.assert_not_called()
+        guard.reason = "library_search_route_rejected"
+        with patch.object(page, "content") as content:
+            with self.assertRaises(RetrievalUnavailable) as caught:
+                SubscriptionSearch._poll_results(page, guard, filters)
+        self.assertEqual(caught.exception.reason, "library_search_route_rejected")
+        content.assert_not_called()
+
+    def test_results_poll_timeout_is_bounded_and_does_not_accept_unsubmitted_rows(self):
+        filters = dict(year_from=None, year_to=None, reviewed_only=False, limit=10)
+        for html, submitted in (("", True), (OBSERVED_RESULTS, False)):
+            page, guard = self.guard()
+            page.url, page.html = "https://www.proquest.com/results/synthetic/1", html
+            guard.search_sent = submitted
+            timer = Clock(0)
+            started = timer()
+            page.wait_for_timeout = lambda milliseconds: timer.advance(milliseconds / 1000)
+            with self.assertRaises(RetrievalUnavailable) as caught:
+                SubscriptionSearch._poll_results(page, guard, filters, clock=timer)
+            self.assertEqual(caught.exception.reason, "library_search_results_timeout")
+            # The final integer-millisecond wait can leave a submillisecond tail.
+            self.assertGreaterEqual(timer() - started, 44.99)
+            self.assertLessEqual(timer() - started, 45.001)
+            self.assertEqual(self.reservations, 0)
 
     def test_dom_retries_url_changes_and_title_context_loss_without_mixing_snapshots(self):
         page, guard = self.guard()

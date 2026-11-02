@@ -19,7 +19,8 @@ and .snippet. Journal labels alone do not establish peer review. Optional DOI
 fields are returned only when present. The older #searchResults container is
 also supported. #noResults explicitly means no matches. Unrecognized markup
 raises library_search_unsupported_page. Tests use synthetic text exclusively.
-Filters apply conservatively to this one visible page, without pagination.
+The first results HTML response is read through the guarded browser stream and
+parsed before its scripts execute. Filters apply conservatively to that page.
 """
 from __future__ import annotations
 
@@ -63,6 +64,8 @@ REQUEST_INTERVAL = 15
 CACHE_SECONDS = 600
 CACHE_ENTRIES = 24
 STATE_BYTES = 2_000_000
+RESPONSE_BYTES = 2_000_000
+STREAM_CHUNK_BYTES = 65_536
 RESULT_ROOT = "#lor_container .resultListContainer ul.resultItems"
 RESULT_WAIT = RESULT_ROOT + " > li.resultItem, #searchResults li.resultItem, #noResults"
 _HOUSEKEEPING = frozenset({
@@ -182,6 +185,9 @@ class _Routes:
         self.session = None
         self.main_frame_id = None
         self.navigation_requests = 0
+        self.result_html = None
+        self.capture_started = False
+        self._stream_clock = time.monotonic
 
     def install(self, context):
         # Target-scoped CDP pauses every native redirect hop. Playwright route
@@ -234,6 +240,18 @@ class _Routes:
             if ("application/pdf" in content.get("content-type", "")
                     or "attachment" in content.get("content-disposition", "")):
                 _reject("library_search_download_rejected")
+            part = _url(event["request"]["url"])
+            if (self.search_sent and event.get("resourceType") == "Document"
+                    and event.get("frameId") == self.main_frame_id
+                    and part.hostname in PROQUEST_HOSTS
+                    and re.fullmatch(r"/results/[^/]+/1", part.path)
+                    and event["responseStatusCode"] not in (301, 302, 303, 307, 308)):
+                if self.capture_started:
+                    self._abort(route)
+                    return
+                self.capture_started = True
+                self.result_html = self._capture_response(event, content)
+                return
             # An additional policy preserves all publisher policies. Sandboxing
             # blocks popups/downloads before page scripts can run. WebSockets
             # cannot provide a route around the HTTP credential checks.
@@ -253,6 +271,54 @@ class _Routes:
             self._abort(route)
         finally:
             self.pending -= 1
+
+    def _capture_response(self, event, headers):
+        """Read one response with a cooperative deadline, then stop rendering."""
+        handle = None
+        try:
+            try:
+                if event["responseStatusCode"] != 200:
+                    _reject("library_search_response_status_rejected")
+                if headers.get("content-type", "").split(";", 1)[0].strip() != "text/html":
+                    _reject("library_search_response_type_rejected")
+                length = headers.get("content-length")
+                if length and length.isdecimal() and int(length) > RESPONSE_BYTES:
+                    _reject("library_search_response_size_limit")
+                deadline = self._stream_clock() + 25
+                handle = self.session.send("Fetch.takeResponseBodyAsStream", {
+                    "requestId": event["requestId"]})["stream"]
+                body = bytearray()
+                while True:
+                    self.check()
+                    if self._stream_clock() >= deadline:
+                        _reject("library_search_response_timeout")
+                    chunk = self.session.send("IO.read", {"handle": handle, "size": STREAM_CHUNK_BYTES})
+                    if self._stream_clock() >= deadline:
+                        _reject("library_search_response_timeout")
+                    raw = chunk["data"]
+                    if not isinstance(raw, str) or len(raw) > STREAM_CHUNK_BYTES * 2:
+                        _reject("library_search_response_size_limit")
+                    data = base64.b64decode(raw, validate=True) if chunk.get("base64Encoded") else raw.encode("utf-8")
+                    if len(data) > STREAM_CHUNK_BYTES or len(body) + len(data) > RESPONSE_BYTES:
+                        _reject("library_search_response_size_limit")
+                    body.extend(data)
+                    if chunk.get("eof") is True:
+                        if not body:
+                            _reject("library_search_response_empty")
+                        self.check()
+                        return body.decode("utf-8", errors="replace")
+                    if not data:
+                        self.page.wait_for_timeout(25)
+            finally:
+                try:
+                    if handle is not None:
+                        self.session.send("IO.close", {"handle": handle})
+                finally:
+                    self.session.send("Fetch.failRequest", {"requestId": event["requestId"], "errorReason": "Aborted"})
+        except RetrievalUnavailable:
+            raise
+        except (Exception, asyncio.CancelledError):
+            _reject("library_search_response_capture_unavailable")
 
     def check(self):
         if self.reason:
@@ -397,6 +463,7 @@ class _Routes:
                             self.session = None
                 finally:
                     self.secrets = ()
+                    self.result_html = None
 
 
 def _text(node, maximum=1000):
@@ -625,6 +692,8 @@ class SubscriptionSearch:
 
     @staticmethod
     def _dom(page, guard):
+        if guard.result_html is not None:
+            return SubscriptionSearch._html(guard.result_html, guard)
         deadline = time.monotonic() + 3
         for attempt in range(8):
             guard.check()
@@ -646,10 +715,15 @@ class SubscriptionSearch:
             page.wait_for_timeout(200)
         else:
             _reject("library_search_navigation_timeout")
-        if not isinstance(html, str) or len(html) > 2_000_000:
+        return SubscriptionSearch._html(html, guard, title=title)
+
+    @staticmethod
+    def _html(html, guard, *, title=None):
+        guard.check()
+        if not isinstance(html, str) or len(html.encode("utf-8")) > RESPONSE_BYTES:
             _reject("library_search_unsupported_page")
         soup = BeautifulSoup(html, "html.parser")
-        if (challenged(title)
+        if (challenged(title or _text(soup.title, 500))
                 or soup.select_one('iframe[src*="captcha"], .g-recaptcha, input[name="otp"], '
                                    'input[autocomplete="one-time-code"]') is not None
                 or re.search(r"verify you are human|multi.factor authentication|two.factor authentication",
@@ -714,6 +788,9 @@ class SubscriptionSearch:
 
     @staticmethod
     def _follow(page, guard, *, deadline=None):
+        guard.check()
+        if guard.result_html is not None:
+            return
         deadline = min(deadline, time.monotonic() + 8) if deadline is not None else time.monotonic() + 8
         for attempt in range(8):
             guard.check()
@@ -726,6 +803,8 @@ class SubscriptionSearch:
                 SubscriptionSearch._timeout_dom(page, guard)
             except BrowserError as error:
                 guard.check()
+                if guard.result_html is not None:
+                    return
                 if not SubscriptionSearch._navigation_race(error):
                     raise
                 if attempt == 7:
@@ -747,6 +826,26 @@ class SubscriptionSearch:
         except Exception:
             guard.check()
             _reject("library_search_unsupported_page")
+
+    @staticmethod
+    def _poll_results(page, guard, filters, *, clock=time.monotonic):
+        """Pump native response callbacks without accessing the results renderer."""
+        deadline = clock() + 45
+        for _ in range(451):
+            guard.check()
+            if clock() >= deadline:
+                break
+            if guard.search_sent and guard.result_html is not None:
+                soup = SubscriptionSearch._html(guard.result_html, guard)
+                rows = _results(soup, **filters)
+                guard.check()
+                return rows
+            guard.check()
+            remaining = int((deadline - clock()) * 1000)
+            if remaining <= 0:
+                break
+            page.wait_for_timeout(min(100, remaining))
+        _reject("library_search_results_timeout")
 
     def _browse(self, context, query, filters):
         # Lock lifetime follows the browser operation even if runner.run times out.
@@ -821,14 +920,10 @@ class SubscriptionSearch:
                     _reject()
                 guard.search_target = (action, "POST")
                 page.locator("form#searchForm textarea#searchTerm").fill(query)
-                page.locator("form#searchForm a#expandedSearch").click(timeout=15_000)
-                self._follow(page, guard)
-                self._wait(page, guard, RESULT_WAIT)
-                soup = self._dom(page, guard)
-                if not guard.search_sent:
-                    _reject("library_search_unsupported_page")
-                result = {"query": query, "results": _results(soup, **filters),
-                          "source": "proquest_browser_dom", "entry_source": DIRECTORY,
+                page.locator("form#searchForm a#expandedSearch").click(timeout=15_000, no_wait_after=True)
+                rows = self._poll_results(page, guard, filters)
+                result = {"query": query, "results": rows,
+                          "source": "proquest_browser_response", "entry_source": DIRECTORY,
                           "metadata_only": True, "full_text_read": False,
                           "institutional_entitlement": "not_verified", "cached": False,
                           "scope": "first_results_page", "filters": dict(filters)}
