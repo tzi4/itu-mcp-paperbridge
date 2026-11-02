@@ -81,13 +81,13 @@ PAPER_TOOLS = [
                          "description": "Use combined for complementary discovery sources with per-source status."}}, ("query",)),
     _tool("papers_resources", "Find Research Resources",
           "Find official ITU research databases by subject or topic and return their institutional entry links. "
-          "No login or document retrieval is performed. A listed database does not prove subscription entitlement "
-          "for an individual article or that any paper text has been read.",
+          "No login or document retrieval is performed. Directory listings do not verify entitlement "
+          "or full-text access.",
           {"query": {"type": "string", "maxLength": 500, "default": ""},
            "subject": {"type": "string", "minLength": 1, "maxLength": 256},
            "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 10}}),
     _tool("papers_library_query", "Explore Subscription Literature",
-          "Find scholarly records through the operator-enabled institutional browser session. "
+          "Find scholarly records in ProQuest through the operator-enabled institutional browser session. "
           "Requires PAPERBRIDGE_LIBRARY_SEARCH=1 on the host and the configured library account. "
           "Returns metadata and excerpts only, with explicit source and access status. "
           "A PDF link or excerpt does not mean full text was downloaded or read. "

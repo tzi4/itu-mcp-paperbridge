@@ -146,6 +146,18 @@ class RankingTests(unittest.TestCase):
         "kampüs kartı bakiyesi": "obs_get_campus_card",
         "When are my exams": "get_personal_exam_calendar",
         "obs_get_profile": "obs_get_profile",
+        "ProQuest üzerinden kurumsal makale ve tez ara": "papers_library_query",
+        "ProQuest üzerinden tez ara": "papers_library_query",
+        "Find ProQuest journal articles": "papers_library_query",
+        "İTÜ araştırma veritabanlarını konuya göre bul": "papers_resources",
+        "Find research databases by subject": "papers_resources",
+        "2022 sonrası uzay aracı tutum kontrolü makalelerini bul": "papers_search",
+        "Search OpenAlex for recent spacecraft papers": "papers_search",
+        "makale ara": "papers_search",
+        "Find papers": "papers_search",
+        "10.1109/TAC.2022.3143082 DOI erişim bağlantısını bul": "papers_resolve",
+        "makale tam metnini oku": "papers_get_text",
+        "Kütüphane kataloğunda kitap ara": "library_search",
     }
 
     @classmethod
@@ -163,6 +175,22 @@ class RankingTests(unittest.TestCase):
         schema = found["matches"][0]["input_schema"]
         self.assertIn("target_gpa", schema["properties"])
         self.assertNotIn("title", json.dumps(schema))
+
+    def test_paper_intent_returns_canonical_tool_with_discovery_options(self) -> None:
+        found = _call(self.mcp, FIND_TOOL_NAME, {"query": "makale ara", "limit": 1})
+        match = found["matches"][0]
+        self.assertEqual(match["operation"], "papers_search")
+        self.assertEqual(match["call_with"], CALL_TOOL_NAME)
+        properties = match["input_schema"]["properties"]
+        self.assertIn("combined", properties["discovery"]["enum"])
+        self.assertIn("year_from", properties)
+        self.assertIn("kind", properties)
+
+    def test_research_compatibility_alias_remains_explicitly_discoverable(self) -> None:
+        found = _call(self.mcp, FIND_TOOL_NAME, {"query": "search", "limit": 1})
+        match = found["matches"][0]
+        self.assertEqual(match["operation"], "search")
+        self.assertEqual(match["call_with"], "search")
 
     def test_only_leading_matches_carry_schemas(self) -> None:
         found = _call(self.mcp, FIND_TOOL_NAME, {"query": "sınav takvimi", "limit": 5})

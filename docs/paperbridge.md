@@ -40,6 +40,13 @@ single-user application, not a shared multi-user service.
 
 ## Finding research material
 
+The tool router indexes these operations with English and Turkish search aliases.
+Ordinary paper queries lead to `papers_search`, which exposes discovery sources
+and filters. `papers_resources` finds database entry points,
+`papers_library_query` searches ProQuest records, and `papers_resolve` looks up
+access links for a known DOI. The `search` and `fetch` compatibility tools remain
+available to research clients. Library catalog searches use `library_search`.
+
 `papers_search` can combine complementary metadata indexes using
 `discovery="combined"`. Select a year range with `year_from` and `year_to`,
 a publication `kind`, and `order="relevance"`, `"recent"` or `"citations"`.
