@@ -71,7 +71,7 @@ DOMAINS: dict[str, tuple[str, tuple[str, ...]]] = {
          "get_public_exam_schedule", "find_open_course_sections", "find_empty_classrooms"),
     ),
     "coursehub": (
-        "Pool course sites: mathematics, physics, chemistry, announcements, material index, syllabi, exams, student account and reviewed forms",
+        "Official course sites: mathematics, physics, chemistry, laboratory guidance, YDY language programs, material index, student accounts and reviewed forms",
         ("coursehub_sources", "coursehub_explore", "coursehub_materials", "coursehub_page", "coursehub_text",
          "coursehub_review_change", "coursehub_commit_change"),
     ),
@@ -136,11 +136,11 @@ def effect(name: str) -> str:
 # are indexed as well, so list only what a student would type but the
 # description does not already say.
 KEYWORDS: dict[str, str] = {
-    "coursehub_sources": "havuz matematik fizik kimya mathavuz fizikhavuz kimyahavuz",
-    "coursehub_explore": "havuz duyuru izlence ders notu sınav takvimi MAT FIZ KIM",
-    "coursehub_materials": "havuz materyal listesi ders sunuları slayt çalışma soruları sınav arşivi izlence rehber materials index slides practice worksheets exams syllabi guides",
-    "coursehub_page": "havuz sınav yeri sonuç itiraz sunu arşiv öğrenci hesabı",
-    "coursehub_text": "havuz pdf slayt sunu pptx konuşmacı notları belge",
+    "coursehub_sources": "havuz matematik fizik kimya laboratuvar FIZLAB KIMLAB yabancı dil YDY mathavuz fizikhavuz kimyahavuz",
+    "coursehub_explore": "havuz duyuru izlence ders notu sınav takvimi laboratuvar deney hazırlık İngilizce seçmeli diller YDY MAT FIZ KIM ING ALM ARB CIN FRA ISP ITA JPN RUS YTO KOR",
+    "coursehub_materials": "havuz materyal listesi ders sunuları slayt çalışma soruları sınav arşivi izlence rehber laboratuvar deney föyü hazırlık İngilizce seçmeli dil YDY materials index slides practice worksheets exams syllabi guides",
+    "coursehub_page": "havuz sınav yeri sonuç itiraz sunu arşiv öğrenci hesabı laboratuvar deney kılavuz YDY hazırlık dil programı",
+    "coursehub_text": "havuz pdf slayt sunu pptx konuşmacı notları belge laboratuvar deney föyü İngilizce YDY dil katalog",
     "coursehub_review_change": "havuz işlem önizleme itiraz form",
     "coursehub_commit_change": "havuz onayla form gönder",
     "auth_status": "giriş durumu oturum login kontrol",

@@ -1,4 +1,4 @@
-"""Structured access to ITU's pool course sites, with isolated account sessions.
+"""Structured access to ITU course, laboratory and language material sources.
 
 Public reads use their own cookie-free transport. Account reads follow the
 site's own login flow. Writes require an operator-reviewed form rule and a
@@ -32,12 +32,27 @@ SITES = {
     "physics": "fizikhavuz.itu.edu.tr",
     "chemistry": "kimyahavuz.itu.edu.tr",
     "hub": "fefhavuz.itu.edu.tr",
+    "physics_lab": "fizik.itu.edu.tr",
+    "chemistry_lab": "kimya.itu.edu.tr",
+    "languages": "ydy.itu.edu.tr",
 }
-ALIASES = {"MAT": "mathematics", "FIZ": "physics", "KIM": "chemistry", "FEF": "hub"}
+ALIASES = {"MAT": "mathematics", "FIZ": "physics", "KIM": "chemistry", "FEF": "hub",
+           "FIZLAB": "physics_lab", "KIMLAB": "chemistry_lab", "YDY": "languages", "LANG": "languages"}
 SITE_HOSTS = {site: frozenset({host}) for site, host in SITES.items()}
 SITE_HOSTS["physics"] = frozenset({SITES["physics"], "www.fizikhavuz.itu.edu.tr"})
 HOST_SITE = {host: site for site, hosts in SITE_HOSTS.items() for host in hosts}
+HOST_SITE["ardek.itu.edu.tr"] = "languages"
 HOSTS = frozenset(HOST_SITE)
+DOCUMENT_HOSTS = {site: hosts for site, hosts in SITE_HOSTS.items()}
+DOCUMENT_HOSTS["languages"] = SITE_HOSTS["languages"] | {"ardek.itu.edu.tr"}
+_ACCOUNT_SITES = frozenset({"mathematics", "physics", "chemistry"})
+_SEEDED_SITES = frozenset({"physics_lab", "chemistry_lab", "languages"})
+MAX_SEED_PAGES = 20
+_ARDEK_DOCUMENT_PATHS = frozenset(
+    "/docs/librariesprovider95/default-document-library/" + name
+    for name in ("ing-103es.pdf", "ing-103h.pdf", "ing103i.pdf", "ing-103sc.pdf",
+                 "ing-105.pdf", "ing-106.pdf", "ing-205.pdf", "ing-206.pdf")
+)
 SSO_HOST = "girisv3.itu.edu.tr"
 MAX_HTML_BYTES = 2 * 1024**2
 MAX_DOCUMENT_BYTES = 25 * 1024**2
@@ -46,7 +61,15 @@ PREVIEW_TTL = 600
 _MUTATION = re.compile(r"logout|logoff|delete|remove|submit|save|update|insert|cancel|approve|reject|enrol|register|withdraw|upload", re.I)
 _LOGIN = re.compile(r"(?:^|/)(?:login|giris)(?:\.|/|$)", re.I)
 _DOCUMENT = re.compile(r"\.(pdf|docx|pptx|txt|csv|xlsx|doc|ppt|xls|zip|mp4|webm)$", re.I)
-_COURSE_REFERENCE = re.compile(r"(?<![A-Z0-9])((?:MAT|FIZ|KIM)\s*[0-9]{3})(E|/\s*E)?(?![A-Z0-9])", re.I)
+_COURSE_REFERENCE = re.compile(
+    r"(?<![A-Z0-9])((?:MAT|FIZ|KIM|ING|ALM|ARB|CIN|FRA|ISP|ITA|JPN|RUS|YTO|KOR)[\s_-]*[0-9]{3})"
+    r"(EL|CO|ES|SC|A|E|H|I|L|N|/\s*E)?(?![A-Z0-9])", re.I)
+_LANGUAGE_CODE = r"(?:ING[0-9]{3}(?:CO|ES|SC|A|H|I|N)?|(?:ALM|ARB|CIN|FRA|ISP|ITA|JPN|RUS|YTO|KOR)[0-9]{3})"
+_SITE_COURSE_CODES = {
+    "mathematics": r"MAT[0-9]{3}E?", "physics": r"FIZ[0-9]{3}E?", "chemistry": r"KIM[0-9]{3}E?",
+    "physics_lab": r"FIZ[0-9]{3}(?:EL|L)", "chemistry_lab": r"KIM[0-9]{3}(?:EL|L)",
+    "hub": r"(?:MAT[0-9]{3}E?|(?:FIZ|KIM)[0-9]{3}(?:EL|E|L)?)", "languages": _LANGUAGE_CODE,
+}
 MATERIAL_COLLECTIONS = ("all", "slides", "practice", "exams", "syllabi", "guides")
 TEXT_EXTENSIONS = frozenset({".pdf", ".docx", ".pptx", ".txt", ".csv"})
 _READONLY_CONTEXT_INPUTS = frozenset({"text", "search", "email", "url", "tel", "number"})
@@ -56,6 +79,74 @@ _MAT_DOCUMENT_ROUTES = {
     "/show_exam.php": ("exams", "exam", re.compile(r"(MAT[0-9]{3})(T|E)[0-9]{2}[A-Z]{2}")),
 }
 _LOCALE_PARAMETERS = frozenset({"lang", "language", "lng", "locale", "culture"})
+
+
+@dataclass(frozen=True)
+class _SourceSeed:
+    url: str
+    title: str
+    course_codes: tuple[str, ...] = ()
+    course_prefixes: tuple[str, ...] = ()
+    general: bool = False
+    archival: bool = False
+
+
+_LANGUAGE_PROGRAM = "https://ydy.itu.edu.tr/programlar/i-leri-i-ngilizce-programi/"
+_LANGUAGE_PREP = "https://ydy.itu.edu.tr/programlar/lisans-hazirlik-programi/"
+_SOURCE_HOME = {
+    "physics_lab": "https://fizik.itu.edu.tr/havuzdersleri/fiz-10xel-laboratuvar",
+    "chemistry_lab": "https://kimya.itu.edu.tr/kimya-havuz/kim-101el",
+    "languages": "https://ydy.itu.edu.tr/",
+}
+_SOURCE_SEEDS = {
+    "physics_lab": (
+        _SourceSeed("https://fizik.itu.edu.tr/haberdetay/2026/09/22/fiz101el-laboratuvar-derslerinin-i-%C5%9Fleyi%C5%9Fi-hakk%C4%B1nda",
+                    "FIZ101EL laboratory announcement", ("FIZ101EL",)),
+        _SourceSeed(_SOURCE_HOME["physics_lab"], "Physics laboratory course page", general=True),
+        _SourceSeed("https://fizik.itu.edu.tr/arastirma/havuz-ogrenci-laboratuvarlari", "Student laboratory information", general=True),
+        _SourceSeed("https://fizik.itu.edu.tr/arastirma/havuz-ogrenci-laboratuvarlari/havuz-fizik-laboratuvarlari-fiz101el-2020-guz-donemi",
+                    "FIZ101EL laboratory archive, 2020 autumn", ("FIZ101EL",), archival=True),
+    ),
+    "chemistry_lab": (
+        _SourceSeed(_SOURCE_HOME["chemistry_lab"], "KIM101EL laboratory course and safety resources", ("KIM101EL",), general=True),
+    ),
+    "languages": (
+        _SourceSeed(_SOURCE_HOME["languages"], "Language school announcements", general=True),
+        _SourceSeed(_LANGUAGE_PROGRAM + "ing-100", "ING100", ("ING100",)),
+        _SourceSeed(_LANGUAGE_PROGRAM + "ing-112a", "ING112A", ("ING112A",)),
+        _SourceSeed(_LANGUAGE_PROGRAM + "ing-201a", "ING201A", ("ING201A",)),
+        _SourceSeed(_LANGUAGE_PROGRAM + "ing-103", "ING103 course variants",
+                    ("ING103", "ING103CO", "ING103ES", "ING103H", "ING103I", "ING103N", "ING103SC")),
+        _SourceSeed(_LANGUAGE_PROGRAM + "diger-genel-ingilizce", "Other general English courses",
+                    ("ING105", "ING106", "ING205", "ING206"), ("ING",)),
+        *(_SourceSeed("https://ydy.itu.edu.tr/programlar/secmeli-diller/" + slug, title,
+                      course_prefixes=(prefix,))
+          for slug, title, prefix in (
+              ("almanca", "German", "ALM"), ("arapca", "Arabic", "ARB"), ("cince", "Chinese", "CIN"),
+              ("fransizca", "French", "FRA"), ("ispanyolca", "Spanish", "ISP"), ("italyanca", "Italian", "ITA"),
+              ("japonca", "Japanese", "JPN"), ("rusca", "Russian", "RUS"), ("turkce", "Turkish", "YTO"))),
+        _SourceSeed("https://ydy.itu.edu.tr/haber-detay/2026/09/28/korece", "Korean course announcement",
+                    ("KOR101",), ("KOR",)),
+        *(_SourceSeed(_LANGUAGE_PREP + slug, title, general=True)
+          for slug, title in (("program-hakkinda", "Preparatory program information"),
+                              ("ogrenci-el-kitabi", "Student handbook guidance"),
+                              ("yeterlik-sinavi", "Proficiency exam format"),
+                              ("mufredat-rehberi", "Preparatory curriculum guidance"))),
+    ),
+}
+_PAGE_PREFIXES = {
+    "physics_lab": ("/arastirma/havuz-ogrenci-laboratuvarlari", "/havuzdersleri/fiz-10xel-laboratuvar"),
+    "chemistry_lab": ("/kimya-havuz/kim-101el",),
+    "languages": ("/programlar/i-leri-i-ngilizce-programi", "/programlar/secmeli-diller", "/programlar/lisans-hazirlik-programi", "/haber-detay"),
+}
+_SOURCE_HANDOFFS = {
+    "languages": (
+        {"title": "YDY student status portal", "url": "https://ydydurum.itu.edu.tr/ydyo-ogrenci/",
+         "access": "browser_only", "notice": "Separate authentication is not implemented by CourseHub."},
+        {"title": "Legacy proficiency results", "url": "http://www.ydy2.itu.edu.tr/yeterlilik",
+         "access": "unsupported_http", "notice": "CourseHub does not downgrade HTTPS or submit a results query."},
+    )
+}
 
 
 class CourseHubError(NinovaError):
@@ -69,7 +160,7 @@ class _AccountSessionExpired(CourseHubError):
 def site_key(value: str) -> str:
     key = ALIASES.get(value.upper(), value.lower())
     if key not in SITES:
-        raise CourseHubError("site must be mathematics, physics, chemistry or hub (MAT/FIZ/KIM/FEF).")
+        raise CourseHubError("Use mathematics/MAT, physics/FIZ, chemistry/KIM, hub/FEF, physics_lab/FIZLAB, chemistry_lab/KIMLAB or languages/YDY.")
     return key
 
 
@@ -97,7 +188,47 @@ def readable_url(url: str, hosts=HOSTS) -> str:
     for name, _ in parse_qsl(parts.query, keep_blank_values=True):
         if name.lower() in {"action", "act", "cmd", "do", "operation", "task"}:
             raise CourseHubError("Action query parameters are not accepted by reading tools.")
+    if parts.hostname == "ardek.itu.edu.tr" and unquote(unquote(parts.path)) not in _ARDEK_DOCUMENT_PATHS:
+        raise CourseHubError("Only the verified ARDEK language document paths are allowed.")
     return url
+
+
+def _checked_source_page(url: str, site: str) -> str:
+    url = readable_url(url, SITE_HOSTS[site])
+    if site not in _SEEDED_SITES:
+        return url
+    path = unquote(unquote(urlsplit(url).path)).rstrip("/") or "/"
+    seeds = {unquote(unquote(urlsplit(seed.url).path)).rstrip("/") or "/" for seed in _SOURCE_SEEDS[site]}
+    if path in seeds or site == "languages" and path == "/":
+        return url
+    if any(path == prefix or path.startswith(prefix + "/") for prefix in _PAGE_PREFIXES[site]):
+        return url
+    raise CourseHubError("This page is outside the verified educational source paths.")
+
+
+def _checked_source_document(url: str, site: str) -> str:
+    return readable_url(url, DOCUMENT_HOSTS[site])
+
+
+def _source_root(site: str, authenticated: bool = False) -> str:
+    return _SOURCE_HOME.get(site, f"https://{SITES[site]}/" +
+                            ("student/" if authenticated and site == "chemistry" else ""))
+
+
+def _seed_metadata(seed: _SourceSeed) -> dict:
+    return {"url": seed.url, "title": seed.title, "course_codes": list(seed.course_codes),
+            "course_prefixes": list(seed.course_prefixes), "general": seed.general, "archival": seed.archival}
+
+
+def _selected_seeds(site: str, course_code: str | None) -> list[_SourceSeed]:
+    seeds = list(_SOURCE_SEEDS[site])
+    if course_code is None:
+        return seeds
+    exact = [seed for seed in seeds if course_code in seed.course_codes]
+    family = [seed for seed in seeds if any(course_code.startswith(prefix) for prefix in seed.course_prefixes)
+              and (not exact or not seed.course_codes)]
+    selected = exact + family + [seed for seed in seeds if seed.general]
+    return list(dict.fromkeys(selected))
 
 
 def _login_destination(url: str, hosts) -> bool:
@@ -216,12 +347,13 @@ def _course_references(value: str) -> list[str]:
     """Expand the sites' shared MAT103/E labels without conflating separate courses."""
     codes = set()
     for match in _COURSE_REFERENCE.finditer(value):
-        base = re.sub(r"\s+", "", match[1]).upper()
+        base = re.sub(r"[\s_-]+", "", match[1]).upper()
         suffix = re.sub(r"\s+", "", match[2] or "").upper()
         if suffix == "/E":
-            codes.update((base, base + "E"))
+            candidates = (base, base + "E")
         else:
-            codes.add(base + suffix)
+            candidates = (base + suffix,)
+        codes.update(code for code in candidates if any(re.fullmatch(pattern, code) for pattern in _SITE_COURSE_CODES.values()))
     return sorted(codes)
 
 
@@ -251,9 +383,9 @@ def _material_details(title: str, url: str, *, kind: str | None = None) -> dict:
             kind = "syllabus"
     if kind == "document" and collection is None:
         label = normalize_lookup_text(title + " " + unquote(parts.path)).replace("_", " ")
-        if re.search(r"\b(?:syllabus|syllabi|izlence)\b", label):
+        if re.search(r"\b(?:syllabus|syllabi|izlence|catalog|catalogue|katalog)\b", label):
             collection = "syllabi"
-        elif re.search(r"\b(?:guide|rehber\w*|kilavuz\w*|rules|kurallar\w*|form|objection|itiraz\w*|makeup|mazeret)\b", label):
+        elif re.search(r"\b(?:guide|rehber\w*|kilavuz\w*|rules|kurallar\w*|formu?|safety|guvenlik|handbook|booklet|kitapcik\w*|objection|itiraz\w*|makeup|mazeret)\b", label):
             collection = "guides"
         elif parts.path.lower().endswith((".ppt", ".pptx")) or re.search(r"\b(?:slides?|sunular\w*|sunu\w*|lecture notes)\b", label):
             collection = "slides"
@@ -284,9 +416,8 @@ def _course_match(codes: list[str], requested: str | None, *, shared: bool = Fal
 def _requested_material_course(site: str, course_code: str | None) -> str | None:
     if not course_code:
         return None
-    code = re.sub(r"\s+", "", course_code).upper()
-    prefixes = {"mathematics": "MAT", "physics": "FIZ", "chemistry": "KIM", "hub": "(?:MAT|FIZ|KIM)"}
-    if not re.fullmatch(prefixes[site] + r"[0-9]{3}E?", code):
+    code = re.sub(r"[\s_-]+", "", course_code).upper()
+    if not re.fullmatch(_SITE_COURSE_CODES[site], code):
         raise CourseHubError("Use a course code belonging to the selected site, such as MAT103E.")
     return code
 
@@ -357,7 +488,13 @@ def parse_page(html: str, url: str, *, max_chars: int = 30000) -> dict:
         host = urlsplit(target).hostname
         details = _material_details(_text(anchor), target)
         try:
-            readable_url(target)
+            owner = HOST_SITE.get(host)
+            if owner is None:
+                raise CourseHubError("This link belongs to another platform.")
+            if details["kind"] == "document":
+                _checked_source_document(target, owner)
+            else:
+                _checked_source_page(target, owner)
             can_read = True
         except CourseHubError:
             can_read = False
@@ -373,6 +510,12 @@ def parse_page(html: str, url: str, *, max_chars: int = 30000) -> dict:
                 links.append({"title": choice["title"], "url": target,
                               **_material_details(choice["title"], target, kind="syllabus"),
                               "pool_site": True, "readable": True})
+    # Sitefinity places the entire public page inside one server form. Remove
+    # controls, never their static surrounding content, before reading text.
+    for node in soup.select("script,style,input,select,textarea,button"):
+        node.decompose()
+    for form in soup.select("form"):
+        form.unwrap()
     tables = []
     for table in soup.select("table"):
         rows = [[_text(cell) for cell in row.find_all(["th", "td"], recursive=False)]
@@ -390,8 +533,6 @@ def parse_page(html: str, url: str, *, max_chars: int = 30000) -> dict:
         section_text = "\n".join(x for x in nodes if x)
         sections.append({"heading": _text(heading), "text": section_text[:max_chars],
                          "truncated": len(section_text) > max_chars})
-    for node in soup.select("script,style,form,input,select,textarea,button"):
-        node.decompose()
     text = soup.get_text("\n", strip=True)
     return marked({"url": url, "title": _text(soup.title), "text": text[:max_chars],
                    "truncated": len(text) > max_chars, "sections": sections[:80], "tables": tables[:30],
@@ -448,7 +589,7 @@ class CourseHubClient:
                 "student_number": os.getenv("NINOVA_COURSEHUB_STUDENT_NUMBER", "")}
 
     def _request(self, session, method: str, url: str, *, hosts, data=None, limit=MAX_HTML_BYTES,
-                 login_flow=False, referer: str | None = None) -> tuple[str, bytes, str]:
+                 login_flow=False, referer: str | None = None, url_guard=None) -> tuple[str, bytes, str]:
         """Bound every response and validate each hop before network access.
 
         Public requests clear cookies before every hop. POST redirects may
@@ -458,6 +599,8 @@ class CourseHubClient:
         source = checked_url(referer, hosts) if referer else None
         for _ in range(7):
             checked_url(current, hosts)
+            if url_guard is not None:
+                url_guard(current)
             if method == "GET" and not login_flow:
                 readable_url(current, hosts)
             remaining = self._delay - (self._clock() - self._last_request)
@@ -482,6 +625,8 @@ class CourseHubClient:
                 raise CourseHubError("Pool site transport failed. No empty result was inferred.") from None
             try:
                 final = checked_url(response.url or current, hosts)
+                if url_guard is not None:
+                    url_guard(final)
                 if response.status_code in REDIRECT_STATUS_CODES:
                     location = response.headers.get("Location")
                     if not location:
@@ -490,6 +635,8 @@ class CourseHubClient:
                     if not login_flow and session is not self.public and _login_destination(destination, hosts):
                         raise _AccountSessionExpired("The pool account session expired. Repeat the requested read to sign in again.")
                     target = checked_url(destination, hosts)
+                    if url_guard is not None:
+                        url_guard(target)
                     if method != "GET" and response.status_code in {307, 308} and target != current:
                         raise CourseHubError("Refusing to replay a form body to a redirected destination.")
                     if response.status_code == 303 or response.status_code in {301, 302} and method == "POST":
@@ -530,17 +677,21 @@ class CourseHubClient:
                 expired.close()
 
     def _read_get(self, site: str, url: str, authenticated: bool, *, limit=MAX_HTML_BYTES,
-                  refresh_budget: _ReadRefreshBudget | None = None, allow_refresh: bool = False):
+                  refresh_budget: _ReadRefreshBudget | None = None, allow_refresh: bool = False,
+                  document: bool = False):
         """Recover one cached, expired account for the same allowlisted GET only."""
-        hosts = SITE_HOSTS[site]
-        readable_url(url, hosts)
+        if authenticated and site not in _ACCOUNT_SITES:
+            raise CourseHubError("This source supports public reads only. No account login is implemented.")
+        hosts = DOCUMENT_HOSTS[site] if document else SITE_HOSTS[site]
+        guard = (lambda target: _checked_source_document(target, site)) if document else (lambda target: _checked_source_page(target, site))
+        guard(url)
         budget = refresh_budget if refresh_budget is not None else _ReadRefreshBudget()
         cached_on_entry = authenticated and site in self._accounts
         session = self._login(site) if authenticated else self.public
         refreshed = False
         for attempt in range(2):
             try:
-                final, data, content_type = self._request(session, "GET", url, hosts=hosts, limit=limit)
+                final, data, content_type = self._request(session, "GET", url, hosts=hosts, limit=limit, url_guard=guard)
                 if _login_html(data, final, content_type, hosts):
                     if authenticated:
                         raise _AccountSessionExpired("The pool account session expired after returning login HTML.")
@@ -562,11 +713,15 @@ class CourseHubClient:
         raise CourseHubError("The bounded account read could not complete.")
 
     def sites(self) -> dict:
-        return marked({"sites": [{"site": key, "url": f"https://{host}/",
-                                  "authentication": "none" if key == "hub" else
+        return marked({"sites": [{"site": key, "url": _source_root(key),
+                                  "authentication": "public_only" if key not in _ACCOUNT_SITES else
                                   "ITU username and student number" if key == "chemistry" else "ITU SSO",
                                   "session_cached": key in self._accounts,
-                                  "session_status": "cached_not_revalidated" if key in self._accounts else "not_cached"}
+                                  "session_status": "cached_not_revalidated" if key in self._accounts else "not_cached",
+                                  "capabilities": {"public_read": True, "account_read": key in _ACCOUNT_SITES,
+                                                   "reviewed_write": key in _ACCOUNT_SITES},
+                                  "entry_points": [_seed_metadata(seed) for seed in _SOURCE_SEEDS.get(key, ())],
+                                  "handoffs": list(_SOURCE_HANDOFFS.get(key, ()))}
                                  for key, host in SITES.items()],
                        "writes_enabled": os.getenv("NINOVA_COURSEHUB_WRITES", "0") == "1",
                        "write_rule_count": len(self._rules()),
@@ -636,8 +791,8 @@ class CourseHubClient:
             raise CourseHubError("ITU SSO still requires browser interaction after the warning.")
 
     def _login(self, site: str):
-        if site == "hub":
-            raise CourseHubError("The hub has no student account login.")
+        if site not in _ACCOUNT_SITES:
+            raise CourseHubError("This source supports public reads only. No account login is implemented.")
         if site in self._accounts:
             return self._accounts[site]
         host = SITES[site]
@@ -708,8 +863,7 @@ class CourseHubClient:
         if not 1000 <= max_chars <= 100000:
             raise CourseHubError("max_chars must be between 1000 and 100000.")
         with self._lock:
-            _, _, result = self._page(key, url or f"https://{SITES[key]}/" +
-                                       ("student/" if authenticated and key == "chemistry" else ""), authenticated, max_chars,
+            _, _, result = self._page(key, url or _source_root(key, authenticated), authenticated, max_chars,
                                        refresh_budget=_refresh_budget, allow_refresh=True)
             return {**result, "site": key, "authenticated": authenticated}
 
@@ -719,13 +873,16 @@ class CourseHubClient:
         if not 1 <= max_pages <= 20:
             raise CourseHubError("max_pages must be between 1 and 20.")
         code = _requested_material_course(key, course_code)
-        queue, visited, pages, resources, errors = [None], set(), [], {}, []
+        if authenticated and key not in _ACCOUNT_SITES:
+            raise CourseHubError("This source supports public reads only. No account login is implemented.")
+        queue = [seed.url for seed in _selected_seeds(key, code)] if key in _SEEDED_SITES else [None]
+        visited, pages, resources, errors = set(), [], {}, []
         attempted, queue_limit_reached = 0, False
         refresh_budget = _ReadRefreshBudget()
-        root_url = f"https://{SITES[key]}/"
+        root_url = _source_root(key, authenticated)
         while queue and attempted < max_pages:
             target = queue.pop(0)
-            identity = target or f"https://{SITES[key]}/"
+            identity = target or root_url
             if identity in visited:
                 continue
             visited.add(identity)
@@ -759,7 +916,7 @@ class CourseHubClient:
             queue = [url for url in queue if url not in visited]
             queue.extend(x for x in candidates if x not in visited and x not in queue)
             queue.sort(key=lambda url: (_navigation_priority(url, root_url),
-                                       resources[url]["course_match"] != "exact_course"))
+                                       resources.get(url, {}).get("course_match") != "exact_course"))
             queue_limit_reached = queue_limit_reached or len(queue) > 80
             queue = queue[:80]
         ordered = sorted(resources.values(), key=lambda x: (x["course_match"] != "exact_course", x["course_match"] == "other_course"))
@@ -772,7 +929,7 @@ class CourseHubClient:
 
     def materials(self, site: str, course_code: str | None = None, authenticated: bool = False,
                   collection: str = "all", offset: int = 0, limit: int = 30) -> dict:
-        """Index material links on one root page, without opening their destinations."""
+        """Index linked materials within the source's bounded public or account coverage."""
         key = site_key(site)
         code = _requested_material_course(key, course_code)
         if collection not in MATERIAL_COLLECTIONS:
@@ -781,6 +938,10 @@ class CourseHubClient:
             raise CourseHubError("offset must be an integer between 0 and 10000.")
         if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
             raise CourseHubError("limit must be an integer between 1 and 100.")
+        if key in _SEEDED_SITES:
+            if authenticated:
+                raise CourseHubError("This source supports public reads only. No account login is implemented.")
+            return self._seeded_materials(key, code, collection, offset, limit)
         page = self.read_page(key, authenticated=authenticated)
         indexed, excluded = [], 0
         for link in page["links"]:
@@ -812,6 +973,90 @@ class CourseHubClient:
                        "coverage_notice": "Only links on this source page were indexed. Nested pages and document contents were not read. "
                        "Collection labels may come from titles or extensions. Course matches describe identifiers or labels, not verified document contents."})
 
+    def _seeded_materials(self, site: str, code: str | None, collection: str, offset: int, limit: int) -> dict:
+        seeds = _selected_seeds(site, code)
+        records, sources, errors, handoffs = {}, [], [], {}
+        omitted = {name: 0 for name in ("sections", "tables", "links", "forms")}
+        attempted = 0
+        for seed in seeds[:MAX_SEED_PAGES]:
+            attempted += 1
+            try:
+                page = self.read_page(site, url=seed.url)
+            except CourseHubError as exc:
+                errors.append({"url": seed.url, "error": str(exc)})
+                continue
+            sources.append({"source_url": page["url"], "source_title": page["title"],
+                            "entry_point": seed.url, "archival": seed.archival})
+            for name in omitted:
+                omitted[name] += page["omitted"][name]
+            for link in page["links"]:
+                if link["kind"] not in {"document", "syllabus"} and link["collection"] is None:
+                    if (urlsplit(link["url"]).hostname in {"ninova.itu.edu.tr", "moodle.itu.edu.tr", "ydydurum.itu.edu.tr", "www.ydy2.itu.edu.tr"}
+                            and _course_match(link["course_codes"], code) != "other_course"):
+                        handoffs.setdefault(link["url"], {"title": link["title"], "url": link["url"],
+                                                         "source_url": page["url"], "access": "external_platform"})
+                    continue
+                observation = {"source_url": page["url"], "source_title": page["title"],
+                               "link_title": link["title"], "course_codes": list(link["course_codes"]),
+                               "collection": link["collection"], "collection_basis": link["collection_basis"],
+                               "entry_point": seed.url, "archival": seed.archival}
+                item = records.setdefault(link["url"], {**link, "course_codes": [],
+                    "source_url": page["url"], "source_title": page["title"], "source_urls": [],
+                    "titles": [], "source_course_codes": [], "provenance": [], "collections": []})
+                if observation not in item["provenance"]:
+                    item["provenance"].append(observation)
+                item["course_codes"] = sorted(set(item["course_codes"]) | set(link["course_codes"]))
+                item["source_course_codes"] = sorted(set(item["source_course_codes"]) | set(seed.course_codes))
+                if page["url"] not in item["source_urls"]:
+                    item["source_urls"].append(page["url"])
+                if link["title"] not in item["titles"]:
+                    item["titles"].append(link["title"])
+                if link["collection"] is not None and link["collection"] not in item["collections"]:
+                    item["collections"].append(link["collection"])
+                    item["collections"].sort()
+                    if len(item["collections"]) == 1:
+                        item["collection"], item["collection_basis"] = link["collection"], link["collection_basis"]
+                    else:
+                        item["collection"], item["collection_basis"] = None, "conflicting_labels"
+                item["collection_ambiguous"] = len(item["collections"]) > 1
+        if not sources:
+            detail = "; ".join(error["error"] for error in errors[:3])
+            raise CourseHubError(f"No verified source seed pages could be read ({attempted} attempted). {detail}")
+        indexed, excluded = [], 0
+        for item in records.values():
+            relevance = _course_match(item["course_codes"], code, shared=True)
+            if relevance == "other_course":
+                excluded += 1
+                continue
+            indexed.append({**item, "course_match": relevance})
+        indexed.sort(key=lambda item: {"exact_course": 0, "shared_course": 1, "identified_course": 2,
+                                       "general_or_unknown": 3}[item["course_match"]])
+        collection_counts = {name: 0 for name in MATERIAL_COLLECTIONS if name != "all"}
+        collection_counts["unclassified"] = 0
+        for item in indexed:
+            for observed in item["collections"] or ["unclassified"]:
+                collection_counts[observed] += 1
+        selected = [item for item in indexed if collection == "all" or collection in item["collections"]]
+        items = selected[offset:offset + limit]
+        next_offset = offset + len(items)
+        remaining = seeds[attempted:]
+        source_urls = list(dict.fromkeys(source["source_url"] for source in sources))
+        return marked({"site": site, "course_code": code, "collection": collection, "authenticated": False,
+            "session_refreshed": False, "materials": items, "count": len(items), "total_count": len(selected),
+            "offset": offset, "limit": limit, "next_offset": next_offset if next_offset < len(selected) else None,
+            "has_more": next_offset < len(selected), "collection_counts": collection_counts,
+            "other_courses_excluded": excluded, "source_url": source_urls[0], "source_urls": source_urls,
+            "sources": sources, "entry_points": [_seed_metadata(seed) for seed in seeds],
+            "pages_read": len(sources), "pages_attempted": attempted, "page_limit": MAX_SEED_PAGES,
+            "seeds_total": len(seeds), "remaining_seeds": len(remaining),
+            "remaining_seed_urls": [seed.url for seed in remaining], "errors": errors, "omitted": omitted,
+            "coverage": "seed_pages_only", "partial": bool(errors or remaining or omitted["links"]),
+            "collection_counts_notice": "Category counts can overlap when the observed labels conflict.",
+            "handoffs": [*handoffs.values(), *list(_SOURCE_HANDOFFS.get(site, ()))],
+            "coverage_notice": "Only the listed verified public seed pages were indexed. Counts describe observed linked materials, not an exhaustive course archive. "
+            "General safety or guidance files remain unassigned to a course unless their own label or URL identifies it. "
+            "Source context and archival provenance do not establish a document's current applicability."})
+
     def read_document(self, url: str, *, authenticated: bool = False, max_chars: int = 30000):
         url = readable_url(url)
         initial_extension = guess_extension(url=url)
@@ -823,7 +1068,7 @@ class CourseHubClient:
             raise CourseHubError("max_chars must be between 1000 and 100000.")
         with self._lock:
             session, final, data, ctype, refreshed = self._read_get(
-                key, url, authenticated, limit=MAX_DOCUMENT_BYTES, allow_refresh=True)
+                key, url, authenticated, limit=MAX_DOCUMENT_BYTES, allow_refresh=True, document=True)
         ext = guess_extension(url=final, content_type=ctype)
         if ext in {".html", ".htm"} or "html" in ctype.lower():
             raise CourseHubError("The document returned HTML, possibly an expired login. Use coursehub_page.")
@@ -862,8 +1107,10 @@ class CourseHubClient:
             raise CourseHubError("Pool writes require NINOVA_COURSEHUB_WRITES=1 and an operator-reviewed form rule.")
 
     def prepare_action(self, site: str, page_url: str, form_id: str, fields: dict[str, str]):
-        self._enabled()
         key = site_key(site)
+        if key not in _ACCOUNT_SITES:
+            raise CourseHubError("This public-only source has no reviewed account write adapter.")
+        self._enabled()
         readable_url(page_url, SITE_HOSTS[key])
         with self._lock:
             _, html, page = self._page(key, page_url, True, 1000)

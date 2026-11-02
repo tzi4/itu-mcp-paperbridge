@@ -106,12 +106,15 @@ codes, shuttles, sports facilities, announcements and the library catalog. The
 first rows below are what this fork adds.
 
 I use [CourseHub](docs/course-hub.md) to connect to the mathematics, physics and
-chemistry pool course sites and the faculty hub. Your assistant can read
-announcements, tables, syllabi and documents, including PPTX speaker notes. It can
+chemistry pool course sites, public laboratory guidance, YDY language programs
+and the faculty hub. Your assistant can read announcements, tables, syllabi and
+documents, including PPTX speaker notes. It can
 first list the related slides, practice sheets and exam papers, then open the exact
 file you need. When the site accepts your account, it can also read student pages
-through your own login. Site errors and incomplete coverage stay visible. CourseHub form
-submissions require a verified operator configuration and your approval; no live
+through your own login on supported sites. The laboratory and YDY sources cover
+public information and preserve links to the actual coursework systems. Site
+errors and incomplete coverage stay visible. CourseHub form submissions require
+a verified operator configuration and your approval; no live
 write form is enabled by default.
 
 | What you ask | What the server does |

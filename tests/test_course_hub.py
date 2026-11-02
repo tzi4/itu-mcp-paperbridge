@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 import requests
 
 from ninova_mcp.course_hub import CourseHubError, CourseHubClient, checked_url, parse_page, readable_url
+from ninova_mcp import course_hub as source
 from ninova_mcp.text_extract import extract_text_from_bytes, guess_extension
 
 MATH = "https://mathavuz.itu.edu.tr"
@@ -1119,6 +1120,232 @@ class MaterialIndexTests(unittest.TestCase):
                 with self.assertRaises(CourseHubError):
                     c.materials("MAT", **arguments)
                 self.assertEqual(adapter.sent, [])
+
+
+class PublicExpansionTests(unittest.TestCase):
+    YDY = "https://ydy.itu.edu.tr"
+    ING100 = YDY + "/programlar/i-leri-i-ngilizce-programi/ing-100"
+    ARDEK = "https://ardek.itu.edu.tr/docs/librariesprovider95/default-document-library/ing-103es.pdf?sfvrsn=202bdb92_0"
+    KIMLAB = "https://kimya.itu.edu.tr/kimya-havuz/kim-101el"
+
+    def test_new_source_inventory_is_public_only_and_explicitly_seeded(self):
+        c, adapter = client([], write_rules=[])
+        sites = {entry["site"]: entry for entry in c.sites()["sites"]}
+        self.assertEqual(source.site_key("FIZLAB"), "physics_lab")
+        self.assertEqual(source.site_key("KIMLAB"), "chemistry_lab")
+        self.assertEqual(source.site_key("YDY"), "languages")
+        self.assertEqual(source.site_key("LANG"), "languages")
+        with self.assertRaises(CourseHubError):
+            source.site_key("ALM")
+        for key in ("physics_lab", "chemistry_lab", "languages"):
+            self.assertEqual(sites[key]["authentication"], "public_only")
+            self.assertFalse(sites[key]["capabilities"]["account_read"])
+            self.assertFalse(sites[key]["capabilities"]["reviewed_write"])
+        self.assertEqual(len(sites["physics_lab"]["entry_points"]), 4)
+        self.assertEqual(len(sites["languages"]["entry_points"]), 20)
+        self.assertEqual(adapter.sent, [])
+
+    def test_public_only_sources_reject_account_and_write_requests_before_network(self):
+        with patch.dict(os.environ, {"NINOVA_COURSEHUB_WRITES": "1"}):
+            for key in ("physics_lab", "chemistry_lab", "languages"):
+                c, adapter = client([])
+                c._credentials = Mock(side_effect=AssertionError("Read credentials"))
+                c._session_factory = Mock(side_effect=AssertionError("Created account session"))
+                c._accounts[key] = Mock()
+                for action in (
+                    lambda: c.read_page(key, authenticated=True),
+                    lambda: c.discover(key, authenticated=True),
+                    lambda: c.materials(key, authenticated=True),
+                    lambda: c.read_document("https://" + source.SITES[key] + "/files/example.pdf", authenticated=True),
+                    lambda: c.prepare_action(key, source._source_root(key), "form", {"reason": "Synthetic"}),
+                ):
+                    with self.subTest(key=key, action=action), self.assertRaises(CourseHubError):
+                        action()
+                self.assertEqual(adapter.sent, [])
+                c._credentials.assert_not_called()
+                c._session_factory.assert_not_called()
+
+    def test_sitefinity_static_content_survives_without_control_or_script_values(self):
+        html = '''<title>Public laboratory</title><form method="post" id="aspnetForm">
+        <h1>Laboratory calendar</h1><p>ALM101 and KIM101EL public guidance</p>
+        <table><tr><th>Experiment</th><th>Calendar</th></tr><tr><td>Safety</td><td>November</td></tr></table>
+        <div><textarea name="draft">UNIQUE_TEXTAREA_SECRET</textarea>
+        <input type="hidden" name="__VIEWSTATE" value="UNIQUE_HIDDEN_SECRET">
+        <input type="password" name="password" value="UNIQUE_PASSWORD_SECRET">
+        <input name="student_number" readonly value="UNIQUE_INPUT_SECRET">
+        <select name="choice"><option value="allowed-option">Allowed option</option></select>
+        <script>window.value='UNIQUE_SCRIPT_SECRET'</script></div>
+        <a href="/docs/safety.pdf">Safety booklet</a></form>'''
+        page = parse_page(html, self.KIMLAB)
+        self.assertIn("ALM101 and KIM101EL public guidance", page["text"])
+        self.assertEqual(page["tables"][0]["rows"][1], ["Safety", "November"])
+        self.assertIn("Laboratory calendar", page["sections"][0]["heading"])
+        encoded = json.dumps(page)
+        for sentinel in ("UNIQUE_TEXTAREA_SECRET", "UNIQUE_HIDDEN_SECRET", "UNIQUE_PASSWORD_SECRET", "UNIQUE_INPUT_SECRET", "UNIQUE_SCRIPT_SECRET"):
+            self.assertNotIn(sentinel, encoded)
+        self.assertIn("allowed-option", encoded)
+        self.assertNotIn("Allowed option", page["text"])
+
+    def test_full_lab_and_language_suffixes_never_truncate(self):
+        codes = ["FIZ101L", "FIZ101EL", "KIM101L", "KIM101EL", "MAT103E", "ING100", "ING112A", "ING201A",
+                 "ING103CO", "ING103ES", "ING103H", "ING103I", "ING103N", "ING103SC", "ALM101", "ARB102", "KOR101"]
+        for code in codes:
+            with self.subTest(code=code):
+                html = '<a href="/files/example.pdf">' + code + '</a>'
+                self.assertEqual(parse_page(html, MATH)["links"][0]["course_codes"], [code])
+        html = '<a href="/docs/ing-103es.pdf">Ders Katalog Formu</a>'
+        self.assertEqual(parse_page(html, self.ING100)["links"][0]["course_codes"], ["ING103ES"])
+        for invalid in ("FIZ101ELE", "KIM10123EL", "ING103COX", "ALM101A", "MAT103EL"):
+            self.assertEqual(parse_page('<a href="/files/example.pdf">' + invalid + '</a>', MATH)["links"][0]["course_codes"], [])
+
+    def test_seed_selection_uses_real_family_and_retains_general_guidance(self):
+        alm = source._selected_seeds("languages", "ALM101")
+        self.assertEqual(alm[0].url, self.YDY + "/programlar/secmeli-diller/almanca")
+        self.assertTrue(all(seed.general for seed in alm[1:]))
+        english = source._selected_seeds("languages", "ING103ES")
+        self.assertEqual(english[0].url, self.YDY + "/programlar/i-leri-i-ngilizce-programi/ing-103")
+        self.assertFalse(any(seed.url.endswith("ing-100") for seed in english))
+        turkish_lab = source._selected_seeds("physics_lab", "FIZ101L")
+        self.assertTrue(all(seed.general for seed in turkish_lab))
+        self.assertFalse(any("2020" in seed.url for seed in turkish_lab))
+
+    def test_configured_unlinked_seeds_do_not_break_exploration_sorting(self):
+        c, adapter = client([{"body": "<h1>Public content</h1>"}])
+        result = c.discover("FIZLAB", max_pages=1)
+        self.assertEqual(result["pages_read"], 1)
+        self.assertEqual(result["remaining_pages"], 3)
+        self.assertEqual(result["coverage"], "partial")
+        self.assertEqual(len(adapter.sent), 1)
+
+    def test_new_sources_do_not_crawl_unrelated_same_host_navigation(self):
+        c, adapter = client([{"status": 302, "headers": {"Location": self.YDY + "/hakkimizda/unrelated"}}])
+        with self.assertRaises(CourseHubError):
+            c.read_page("YDY", url=self.ING100)
+        self.assertEqual(len(adapter.sent), 1)
+        c, adapter = client([])
+        with self.assertRaises(CourseHubError):
+            c.read_page("YDY", url=self.YDY + "/administration")
+        self.assertEqual(adapter.sent, [])
+
+    def test_language_home_announcements_are_discoverable_and_readable(self):
+        path = "/haber-detay/2026/10/23/program-announcement"
+        c, adapter = client([
+            {"body": '<form><h1>Announcements</h1><a href="' + path + '">Program announcement</a></form>'},
+            {"body": '<form><h1>Program announcement</h1><p>Public class guidance.</p></form>'},
+        ])
+        result = c.discover("YDY", max_pages=1)
+        self.assertEqual(result["pages"][0]["url"], self.YDY + "/")
+        self.assertTrue(result["resources"][0]["readable"])
+        self.assertEqual(result["coverage"], "partial")
+        page = c.read_page("YDY", url=result["resources"][0]["url"])
+        self.assertIn("Public class guidance.", page["text"])
+        self.assertEqual([request.url for request in adapter.sent], [self.YDY + "/", self.YDY + path])
+
+    def test_ardek_is_document_only_and_exact_paths_are_checked_at_every_redirect(self):
+        c, adapter = client([{"body": b"%PDF-1.4 synthetic", "headers": {"Content-Type": "application/pdf"}}])
+        with patch("ninova_mcp.course_hub.subprocess.run") as run:
+            run.return_value.stdout = b'{"ok":true,"text":"Course syllabus"}'
+            result = c.read_document(self.ARDEK)
+        self.assertTrue(result["ok"])
+        self.assertEqual(len(adapter.sent), 1)
+        c, adapter = client([])
+        with self.assertRaises(CourseHubError):
+            c.read_page("YDY", url=self.ARDEK)
+        with self.assertRaises(CourseHubError):
+            c.read_document("https://ardek.itu.edu.tr/news/unverified.pdf")
+        self.assertEqual(adapter.sent, [])
+        c, adapter = client([{"status": 302, "headers": {"Location": "https://ardek.itu.edu.tr/docs/unverified.pdf"}}])
+        with self.assertRaises(CourseHubError):
+            c.read_document(self.ARDEK)
+        self.assertEqual(len(adapter.sent), 1)
+
+    def test_new_material_index_preserves_archival_provenance_and_link_titles(self):
+        archive_pdf = "https://fizik.itu.edu.tr/docs/librariesprovider20/default-document-library/fiz101el-aciklama2020.pdf?sfvrsn=e79713a5_0"
+        c, adapter = client([
+            {"body": "<title>Laboratory announcement 2026</title><p>Current instructions</p>"},
+            {"body": '<title>FIZ101EL 2020 Güz Dönemi</title><a href="' + archive_pdf + '">dokümanı</a>'},
+            {"body": "<title>Laboratory course page</title>"},
+            {"body": "<title>Student laboratories</title>"},
+        ])
+        result = c.materials("FIZLAB", course_code="FIZ101EL")
+        self.assertEqual(result["coverage"], "seed_pages_only")
+        self.assertEqual(result["pages_read"], 4)
+        self.assertEqual(len(adapter.sent), 4)
+        item = result["materials"][0]
+        self.assertEqual(item["title"], "dokümanı")
+        self.assertIn("2020", item["source_title"])
+        self.assertTrue(item["provenance"][0]["archival"])
+        self.assertNotIn("is_current", item)
+
+    def test_lab_general_safety_stays_unassigned_and_legacy_doc_is_not_extracted(self):
+        html = '''<form><h1>KIM101EL</h1><table><tr><td>Takvim</td><td>Experiment</td></tr></table>
+        <a href="/files/safety.pdf">Güvenlik Kitapçığı</a><a href="/files/control.doc">Deney Kontrol Formu</a></form>'''
+        c, adapter = client([{"body": html}])
+        result = c.materials("KIMLAB", course_code="KIM101L", collection="guides")
+        self.assertEqual(result["total_count"], 2)
+        self.assertTrue(all(item["course_match"] == "general_or_unknown" for item in result["materials"]))
+        legacy = next(item for item in result["materials"] if item["url"].endswith(".doc"))
+        self.assertFalse(legacy["text_extraction_supported"])
+        with self.assertRaisesRegex(CourseHubError, "browser"):
+            c.read_document(legacy["url"])
+        self.assertEqual(len(adapter.sent), 1)
+
+    def test_multi_seed_dedup_preserves_all_course_evidence_and_promotes_known_categories(self):
+        seeds = source._SOURCE_SEEDS["languages"][:2]
+        shared = self.YDY + "/files/shared.pdf"
+        with patch.dict(source._SOURCE_SEEDS, {"languages": seeds}):
+            c, _ = client([
+                {"body": '<title>ING100 source</title><a href="' + shared + '">Resource</a>'},
+                {"body": '<title>ING112A source</title><a href="' + shared + '">ING112A Exam guide</a>'},
+            ])
+            result = c.materials("YDY", collection="guides")
+        self.assertEqual(result["total_count"], 1)
+        item = result["materials"][0]
+        self.assertEqual(item["collection"], "guides")
+        self.assertEqual(item["course_codes"], ["ING112A"])
+        self.assertEqual(len(item["source_urls"]), 2)
+        self.assertEqual(len(item["provenance"]), 2)
+        self.assertEqual(item["titles"], ["Resource", "ING112A Exam guide"])
+
+    def test_multi_seed_conflicting_labels_remain_explicit_in_collection_filters(self):
+        seeds = source._SOURCE_SEEDS["languages"][:2]
+        with patch.dict(source._SOURCE_SEEDS, {"languages": seeds}):
+            c, _ = client([
+                {"body": '<a href="/files/shared.pdf">Exam document</a>'},
+                {"body": '<a href="/files/shared.pdf">Study guide</a>'},
+            ])
+            result = c.materials("YDY", collection="guides")
+        item = result["materials"][0]
+        self.assertIsNone(item["collection"])
+        self.assertTrue(item["collection_ambiguous"])
+        self.assertEqual(item["collections"], ["exams", "guides"])
+        self.assertEqual(item["collection_basis"], "conflicting_labels")
+
+    def test_multi_seed_limits_partial_failures_and_complete_failure_are_explicit(self):
+        with patch.object(source, "MAX_SEED_PAGES", 1):
+            c, _ = client([{"body": "<h1>Announcement</h1>"}])
+            result = c.materials("FIZLAB")
+        self.assertEqual(result["page_limit"], 1)
+        self.assertEqual(result["remaining_seeds"], 3)
+        self.assertTrue(result["partial"])
+        seeds = source._SOURCE_SEEDS["languages"][:2]
+        with patch.dict(source._SOURCE_SEEDS, {"languages": seeds}):
+            c, _ = client([{"status": 503}, {"body": "<title>Available source</title>"}])
+            result = c.materials("YDY")
+            self.assertEqual(result["pages_attempted"], 2)
+            self.assertEqual(result["pages_read"], 1)
+            self.assertEqual(len(result["errors"]), 1)
+            self.assertTrue(result["partial"])
+            c, _ = client([{"status": 503}, {"status": 503}])
+            with self.assertRaisesRegex(CourseHubError, "No verified source seed pages"):
+                c.materials("YDY")
+
+    def test_native_catalog_and_safety_labels_have_label_based_collections(self):
+        for label, expected in [("Ders Katalog Formu", "syllabi"), ("Course catalogue", "syllabi"),
+                                ("Güvenlik Kitapçığı", "guides"), ("Deney Kontrol Formu", "guides")]:
+            page = parse_page('<a href="/files/example.pdf">' + label + '</a>', self.KIMLAB)
+            self.assertEqual(page["links"][0]["collection"], expected)
+            self.assertEqual(page["links"][0]["collection_basis"], "label_or_extension")
 
 
 class PresentationTests(unittest.TestCase):
