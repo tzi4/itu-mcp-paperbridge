@@ -36,6 +36,7 @@ from .resources import RESOURCE_URIS, RESOURCES
 from .obs_client import ObsClient, ObsError, ObsPublicClient, redact_obs_profile
 from .public_client import ItuPublicClient
 from .course_hub_tools import COURSEHUB_INSTRUCTIONS, COURSEHUB_TOOLS, COURSEHUB_WRITE_TOOLS, CourseHubTools
+from .unified_tools import UNIFIED_INSTRUCTIONS, UNIFIED_TOOLS, UnifiedTools
 from .library_client import LibraryClient
 from .mail_client import ItuMailClient
 from .mail_send import ItuMailSender, mail_send_enabled
@@ -208,9 +209,10 @@ SERVER_INSTRUCTIONS = PAPER_INSTRUCTIONS + (
 
 
 SERVER_INSTRUCTIONS += COURSEHUB_INSTRUCTIONS
+SERVER_INSTRUCTIONS += UNIFIED_INSTRUCTIONS
 
 
-class NinovaMcpApp(CourseHubTools):
+class NinovaMcpApp(CourseHubTools, UnifiedTools):
     def __init__(self) -> None:
         load_ninova_env()
         self._client: NinovaClient | None = None
@@ -6666,6 +6668,7 @@ TOOLS: list[dict[str, Any]] = [
 
 TOOLS.extend(PAPER_TOOLS)
 TOOLS.extend(COURSEHUB_TOOLS)
+TOOLS.extend(UNIFIED_TOOLS)
 
 LOCAL_TOOL_NAMES: list[str] = [tool["name"] for tool in TOOLS]
 MAIL_TOOL_NAMES = {
@@ -6901,7 +6904,7 @@ def _tool_registration(app: NinovaMcpApp, name: str,
     # schemas, which FastMCP derives differently from postponed annotations.
     guarded_result.__signature__ = inspect.signature(  # type: ignore[attr-defined]
         fn, eval_str=name in OBS_REGISTRATION_WRITE_TOOL_NAMES
-        or name.startswith("coursehub_") or name in {
+        or name.startswith("coursehub_") or name in {"itu_search", "itu_open",
             "papers_search", "papers_resources", "papers_library_query"},
     )
     return guarded_result, {

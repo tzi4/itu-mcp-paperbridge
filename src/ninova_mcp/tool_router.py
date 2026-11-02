@@ -57,7 +57,7 @@ FAST_PATH_TOOL_NAMES = frozenset({
 # Mail stays published so clients show and confirm each mailbox read.
 NEVER_ROUTED_DOMAINS = frozenset({"mail"})
 # ChatGPT deep research expects these two names.
-NEVER_ROUTED_TOOL_NAMES = frozenset({"search", "fetch"})
+NEVER_ROUTED_TOOL_NAMES = frozenset({"search", "fetch", "itu_search", "itu_open"})
 
 MAX_ERROR_MESSAGE = 500
 DEFAULT_FIND_LIMIT = 5

@@ -11,6 +11,10 @@ from __future__ import annotations
 
 # name -> (one-line description, tool names). Order is the display order.
 DOMAINS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "unified": (
+        "Cross-service content search over enabled Mail, Ninova, OBS, Portal and CourseHub sources",
+        ("itu_search", "itu_open"),
+    ),
     "core": (
         "Login, session and service health diagnostics",
         ("auth_status", "refresh_session", "obs_auth_status", "itu_health"),
@@ -136,6 +140,8 @@ def effect(name: str) -> str:
 # are indexed as well, so list only what a student would type but the
 # description does not already say.
 KEYWORDS: dict[str, str] = {
+    "itu_search": "birleşik arama her yerde tüm kaynaklarda mail ninova obs portal havuz laboratuvar dil belge içerik ara",
+    "itu_open": "arama sonucu referans aç oku getir unified search result reference open",
     "coursehub_sources": "havuz matematik fizik kimya laboratuvar FIZLAB KIMLAB yabancı dil YDY mathavuz fizikhavuz kimyahavuz",
     "coursehub_explore": "havuz duyuru izlence ders notu sınav takvimi laboratuvar deney hazırlık İngilizce seçmeli diller YDY MAT FIZ KIM ING ALM ARB CIN FRA ISP ITA JPN RUS YTO KOR",
     "coursehub_materials": "havuz materyal listesi ders sunuları slayt çalışma soruları sınav arşivi izlence rehber laboratuvar deney föyü hazırlık İngilizce seçmeli dil YDY materials index slides practice worksheets exams syllabi guides",

@@ -116,8 +116,14 @@ visible.
 CourseHub submissions require a verified form adapter and your confirmation.
 No live write form is enabled by default.
 
+I also use [ITU search](docs/unified-search.md) to find matching records across
+enabled sources, then open the results I choose. Your assistant keeps the source
+labels and coverage visible. CourseHub starts with public pages; private sources
+use their configured account access.
+
 | What you ask | What the server does |
 |:---|---|
+| "Search my ITU sources for this project, show where the matches came from, then open the relevant announcement." | Searches enabled sources, reports coverage and reads a selected result by its returned reference |
 | "Research this topic. Through ITU MCP + PaperBridge, also go through IEEE Xplore, Springer and the publishers I can reach through ITU's OpenAthens, find the papers that aren't openly available and include them in your research." | Paper search, DOI lookup and full-text retrieval through your own university access |
 | "Find my MAT103E slides and practice sheets, then summarize the relevant PDFs." | Lists linked slides and practice sheets, then reads the selected PDFs for your assistant to summarize |
 | "Show me the KIM101EL laboratory calendar and read its safety guide." | Reads the public laboratory calendar and safety guide |

@@ -13,6 +13,7 @@ T = TypeVar("T")
 class CacheEntry(Generic[T]):
     value: T
     expires_at: float
+    stored_at: float = 0.0
 
 
 class TtlCache(Generic[T]):
@@ -31,11 +32,20 @@ class TtlCache(Generic[T]):
             return None
         return entry.value
 
+    def age_seconds(self, key: str) -> float | None:
+        """Return the age of a live entry without changing its expiry."""
+        entry = self._entries.get(key)
+        now = time.monotonic()
+        if entry is None or entry.expires_at <= now:
+            return None
+        return max(0.0, now - entry.stored_at)
+
     def set(self, key: str, value: T, *, ttl_seconds: float | None = None) -> T:
         ttl = self.default_ttl_seconds if ttl_seconds is None else max(0.0, float(ttl_seconds))
         if ttl <= 0:
             return value
-        self._entries[key] = CacheEntry(value=value, expires_at=time.monotonic() + ttl)
+        now = time.monotonic()
+        self._entries[key] = CacheEntry(value=value, expires_at=now + ttl, stored_at=now)
         return value
 
     def invalidate(self, key: str | None = None) -> None:
