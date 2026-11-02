@@ -24,13 +24,14 @@ def main() -> None:
         reader = PdfReader(io.BytesIO(data))
         if reader.is_encrypted or len(reader.pages) > 200:
             raise ValueError("Encrypted PDF or page limit exceeded")
-    if extension == ".docx":
+    if extension in {".docx", ".pptx"}:
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
             items = archive.infolist()
             if len(items) > 2000 or sum(i.file_size for i in items) > 32 * 1024**2:
-                raise ValueError("DOCX expansion limit exceeded")
-            if "word/document.xml" not in archive.namelist():
-                raise ValueError("Not a DOCX document")
+                raise ValueError("Office expansion limit exceeded")
+            required = "word/document.xml" if extension == ".docx" else "ppt/presentation.xml"
+            if required not in archive.namelist():
+                raise ValueError("Office document signature mismatch")
     result = extract_text_from_bytes(data, extension=extension, max_chars=chars)
     sys.stdout.buffer.write(json.dumps(result, ensure_ascii=True).encode())
 

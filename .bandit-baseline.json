@@ -56,6 +56,20 @@
       "source_sha256": "0378b7af648c68b9800346f3e0cc7bc0192caf89855cd40db1dabbf859553979",
       "severity": "LOW",
       "reason": "itu-mcp --update runs uv with a fixed argument list: the located uv binary, constant options and an archive URL of this fork at a 40-hex commit from GitHub; no shell."
+    },
+    {
+      "path": "src/ninova_mcp/course_hub.py",
+      "test_id": "B404",
+      "source_sha256": "012c79af967b8992662c9577fa49867afc5d8a18bf6dee66d35e278f07e27d31",
+      "severity": "LOW",
+      "reason": "Bounded CourseHub document parser: fixed Python executable/module, validated extension and character bound, credential-free environment, byte input, deadline and shell disabled."
+    },
+    {
+      "path": "src/ninova_mcp/course_hub.py",
+      "test_id": "B603",
+      "source_sha256": "012c79af967b8992662c9577fa49867afc5d8a18bf6dee66d35e278f07e27d31",
+      "severity": "LOW",
+      "reason": "Bounded CourseHub document parser: fixed Python executable/module, validated extension and character bound, credential-free environment, byte input, deadline and shell disabled."
     }
   ]
 }

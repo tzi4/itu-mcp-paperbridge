@@ -33,8 +33,8 @@ adds three things that neither of them offers:
    your own university access, not only open-access papers.
 3. **A router that saves tokens and time.** Both earlier projects list each
    operation as its own tool; ITU MCP lets you switch whole groups off. Here, instead
-   of loading all 119 tool definitions into every conversation, the 85 read-only
-   operations are reached through one compact tool, so your assistant sees 36 tools.
+   of loading every tool definition into each conversation, most read operations
+   are reached through one compact tool, keeping the visible tool list small.
    In my tests, this server's share of the first prompt dropped to less than half,
    the model picked the right operation more reliably, and several long, multi-step
    requests finished noticeably faster. The router is still evolving.
@@ -104,6 +104,15 @@ the [Model Context Protocol](https://modelcontextprotocol.io) and answers. Witho
 a login, the public tools still work: course and final exam schedules, building
 codes, shuttles, sports facilities, announcements and the library catalog. The
 first rows below are what this fork adds.
+
+I use [CourseHub](docs/course-hub.md) to connect to the mathematics, physics and
+chemistry pool course sites and the faculty hub. Your assistant can read
+announcements, tables, syllabi and documents, including PPTX speaker notes. It can
+first list the related slides, practice sheets and exam papers, then open the exact
+file you need. When the site accepts your account, it can also read student pages
+through your own login. Site errors and incomplete coverage stay visible. CourseHub form
+submissions require a verified operator configuration and your approval; no live
+write form is enabled by default.
 
 | What you ask | What the server does |
 |:---|---|

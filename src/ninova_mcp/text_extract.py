@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import io
 import re
+import posixpath
+import zipfile
+from defusedxml import ElementTree
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 
-SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md", ".csv", ".json", ".xml", ".html", ".htm"}
+SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".pptx", ".txt", ".md", ".csv", ".json", ".xml", ".html", ".htm"}
 DEFAULT_MAX_CHARS = 50_000
 
 
@@ -38,6 +41,7 @@ def guess_extension(
     mapping = {
         "application/pdf": ".pdf",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
         "text/plain": ".txt",
         "text/markdown": ".md",
         "text/csv": ".csv",
@@ -95,6 +99,79 @@ def _extract_docx(data: bytes) -> str:
     return "\n".join(paragraphs).strip()
 
 
+def _extract_pptx(data: bytes) -> str:
+    """Read slides in presentation order and their linked speaker notes.
+
+    Uses package relationships, so sparse slide filenames and reordered slides
+    retain their actual order. No embedded objects or external relationships run.
+    """
+    ns = {"a": "http://schemas.openxmlformats.org/drawingml/2006/main",
+          "p": "http://schemas.openxmlformats.org/presentationml/2006/main",
+          "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships"}
+    rel_ns = "{http://schemas.openxmlformats.org/package/2006/relationships}"
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        entries = archive.infolist()
+        if len(entries) > 2000 or sum(e.file_size for e in entries) > 32 * 1024**2:
+            raise ValueError("PPTX expansion limit exceeded")
+        if len({e.filename for e in entries}) != len(entries):
+            raise ValueError("Duplicate PPTX package entries")
+
+        def xml(path):
+            raw = archive.read(path)
+            if b"<!DOCTYPE" in raw.upper() or b"<!ENTITY" in raw.upper():
+                raise ValueError("XML declarations are not allowed in PPTX parts")
+            return ElementTree.fromstring(raw)
+
+        def relationships(part):
+            relpath = posixpath.join(posixpath.dirname(part), "_rels", posixpath.basename(part) + ".rels")
+            if relpath not in archive.namelist():
+                return {}
+            links = {}
+            for rel in xml(relpath).findall(rel_ns + "Relationship"):
+                if rel.get("TargetMode") == "External":
+                    continue
+                target = rel.get("Target", "")
+                path = posixpath.normpath(posixpath.join(posixpath.dirname(part), target))
+                if target.startswith("/"):
+                    path = posixpath.normpath(target.lstrip("/"))
+                if not path.startswith("ppt/") or "\\" in path:
+                    raise ValueError("PPTX relationship is outside the presentation")
+                links[rel.get("Id")] = (path, rel.get("Type", ""))
+            return links
+
+        presentation = xml("ppt/presentation.xml")
+        links = relationships("ppt/presentation.xml")
+        slides = presentation.findall("p:sldIdLst/p:sldId", ns)
+        if len(slides) > 200:
+            raise ValueError("PPTX slide limit exceeded")
+        text = []
+        for number, slide in enumerate(slides, 1):
+            path, kind = links[slide.get("{" + ns["r"] + "}id")]
+            if not kind.endswith("/slide"):
+                raise ValueError("Invalid slide relationship")
+            root = xml(path)
+            # Text nodes avoid XML indentation and preserve runs within words.
+            paragraphs = ["".join(t.text or "" for t in p.findall(".//a:t", ns))
+                          for p in root.findall(".//a:p", ns)]
+            text.append(f"--- slide {number} ---\n" + "\n".join(p for p in paragraphs if p))
+            for notes_path, rel_type in relationships(path).values():
+                if not rel_type.endswith("/notesSlide"):
+                    continue
+                notes = xml(notes_path)
+                lines = []
+                for shape in notes.findall(".//p:sp", ns):
+                    placeholder = shape.find("p:nvSpPr/p:nvPr/p:ph", ns)
+                    if placeholder is not None and placeholder.get("type") in {"sldNum", "hdr", "ftr", "dt"}:
+                        continue
+                    for para in shape.findall(".//a:p", ns):
+                        line = "".join(t.text or "" for t in para.findall(".//a:t", ns))
+                        if line.strip():
+                            lines.append(line)
+                if lines:
+                    text.append("Speaker notes:\n" + "\n".join(lines))
+        return "\n\n".join(text)
+
+
 def _extract_plain(data: bytes) -> str:
     for encoding in ("utf-8", "utf-8-sig", "cp1254", "latin-1"):
         try:
@@ -129,6 +206,8 @@ def extract_text_from_bytes(
             text = _extract_pdf(data)
         elif ext == ".docx":
             text = _extract_docx(data)
+        elif ext == ".pptx":
+            text = _extract_pptx(data)
         else:
             text = _extract_plain(data)
             if ext in {".html", ".htm"}:

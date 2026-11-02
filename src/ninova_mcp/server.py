@@ -31,6 +31,7 @@ from .prompts import PROMPT_NAMES, PROMPTS
 from .resources import RESOURCE_URIS, RESOURCES
 from .obs_client import ObsClient, ObsError, ObsPublicClient, redact_obs_profile
 from .public_client import ItuPublicClient
+from .course_hub_tools import COURSEHUB_INSTRUCTIONS, COURSEHUB_TOOLS, COURSEHUB_WRITE_TOOLS, CourseHubTools
 from .library_client import LibraryClient
 from .mail_client import ItuMailClient
 from .mail_send import ItuMailSender, mail_send_enabled
@@ -202,7 +203,10 @@ SERVER_INSTRUCTIONS = PAPER_INSTRUCTIONS + (
 )
 
 
-class NinovaMcpApp:
+SERVER_INSTRUCTIONS += COURSEHUB_INSTRUCTIONS
+
+
+class NinovaMcpApp(CourseHubTools):
     def __init__(self) -> None:
         load_ninova_env()
         self._client: NinovaClient | None = None
@@ -6642,6 +6646,7 @@ TOOLS: list[dict[str, Any]] = [
 
 
 TOOLS.extend(PAPER_TOOLS)
+TOOLS.extend(COURSEHUB_TOOLS)
 
 LOCAL_TOOL_NAMES: list[str] = [tool["name"] for tool in TOOLS]
 MAIL_TOOL_NAMES = {
@@ -6683,6 +6688,7 @@ REMOTE_EXCLUDED_TOOLS = {
     "ninova_prepare_message_reply",
     "ninova_post_message_reply",
 }
+REMOTE_EXCLUDED_TOOLS.update(COURSEHUB_WRITE_TOOLS)
 REMOTE_TOOL_NAMES: list[str] = [
     name for name in LOCAL_TOOL_NAMES if name not in REMOTE_EXCLUDED_TOOLS
 ]
@@ -6712,6 +6718,8 @@ STATEFUL_TOOL_NAMES = {
 }
 DESTRUCTIVE_TOOL_NAMES = {"submit_assignment", "obs_save_registration_draft", "mail_send_message",
                           "help_submit_ticket", "ninova_post_message_reply"}
+STATEFUL_TOOL_NAMES.update(COURSEHUB_WRITE_TOOLS)
+DESTRUCTIVE_TOOL_NAMES.add("coursehub_commit_change")
 # Tools whose results are content blocks rather than a JSON object.
 UNSTRUCTURED_TOOL_NAMES = {
     "mail_get_attachment", "papers_get_page", "papers_visual_probe",
@@ -6873,7 +6881,7 @@ def _tool_registration(app: NinovaMcpApp, name: str,
     # Resolve the write tool's strict types without changing legacy output
     # schemas, which FastMCP derives differently from postponed annotations.
     guarded_result.__signature__ = inspect.signature(  # type: ignore[attr-defined]
-        fn, eval_str=name in OBS_REGISTRATION_WRITE_TOOL_NAMES,
+        fn, eval_str=name in OBS_REGISTRATION_WRITE_TOOL_NAMES or name.startswith("coursehub_"),
     )
     return guarded_result, {
         "name": name,
