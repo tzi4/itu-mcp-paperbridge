@@ -105,21 +105,23 @@ a login, the public tools still work: course and final exam schedules, building
 codes, shuttles, sports facilities, announcements and the library catalog. The
 first rows below are what this fork adds.
 
-I use [CourseHub](docs/course-hub.md) to connect to the mathematics, physics and
-chemistry pool course sites, public laboratory guidance, YDY language programs
-and the faculty hub. Your assistant can read announcements, tables, syllabi and
-documents, including PPTX speaker notes. It can
-first list the related slides, practice sheets and exam papers, then open the exact
-file you need. When the site accepts your account, it can also read student pages
-through your own login on supported sites. The laboratory and YDY sources cover
-public information and preserve links to the actual coursework systems. Site
-errors and incomplete coverage stay visible. CourseHub form submissions require
-a verified operator configuration and your approval; no live
-write form is enabled by default.
+I use [CourseHub](docs/course-hub.md) to read ITU's pool-course materials,
+laboratory guidance and YDY language pages. Your assistant can find slides,
+practice sheets, exam papers and syllabi, then read the selected documents,
+including PPTX speaker notes. Supported student pages use your own ITU account.
+Laboratory and YDY sources provide public information and links to the actual
+coursework systems. Source errors, partial coverage and archival dates remain
+visible.
+
+CourseHub submissions require a verified form adapter and your confirmation.
+No live write form is enabled by default.
 
 | What you ask | What the server does |
 |:---|---|
 | "Research this topic. Through ITU MCP + PaperBridge, also go through IEEE Xplore, Springer and the publishers I can reach through ITU's OpenAthens, find the papers that aren't openly available and include them in your research." | Paper search, DOI lookup and full-text retrieval through your own university access |
+| "Find my MAT103E slides and practice sheets, then summarize the relevant PDFs." | Lists linked slides and practice sheets, then reads the selected PDFs for your assistant to summarize |
+| "Show me the KIM101EL laboratory calendar and read its safety guide." | Reads the public laboratory calendar and safety guide |
+| "Find the ING112A course catalog and explain its requirements." | Finds the public course catalog and extracts its text for your assistant to explain |
 | "Scan Ninova for new assignments, download the files, work through the questions and show me a draft. Upload the reviewed file after I confirm." | Assignment discovery, file download and submission; uploads need your confirmation |
 | "Reply to my instructor's last email, attach my report and show me before sending." | A previewed reply, sent or saved to Drafts only after you approve it |
 | "Answer the question on my course's message board, but show me first." | Ninova message board threads and a reply posted only after you approve it |
