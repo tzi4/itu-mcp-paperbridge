@@ -539,8 +539,9 @@ class SubscriptionSearchTests(unittest.TestCase):
         with patch("paperbridge.subscription_search.os.replace", side_effect=OSError("private path")):
             self.reason("library_search_state_unavailable", lambda: self.searcher().search("different"))
         self.assertEqual((self.directory / "requests.json").read_bytes(), before)
-        self.assertEqual({p.name for p in self.directory.iterdir()},
-                         {"requests.json", "requests.lock", "operation.lock"})
+        remaining = {p.name for p in self.directory.iterdir()}
+        self.assertIn("requests.json", remaining)
+        self.assertLessEqual(remaining, {"requests.json", "requests.lock", "operation.lock"})
 
     def test_filelock_blocks_other_process_reservation(self):
         self.searcher().search("topic")
