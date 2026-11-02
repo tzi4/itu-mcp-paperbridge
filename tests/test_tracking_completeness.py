@@ -323,6 +323,61 @@ class DashboardEnrollmentTests(unittest.TestCase):
                         [{**COURSE, 'url': BASE + '/Sinif/1.1'}, {**COURSE, 'url': BASE + '/Sinif/1.2'}])
                 self.assertNotEqual(result['status'], 'complete')
 
+    @staticmethod
+    def grouped_cards():
+        return ('<div class="menuErisimAgaci"><ul>'
+                '<li><span>ITU 401</span><ul>'
+                '<li><a href="/Sinif/1.1">Internship 2026</a></li>'
+                '<li><a href="/Sinif/1.2">Internship 2025</a></li></ul></li>'
+                '<li><span>UCK 358E</span><ul>'
+                '<li><a href="/Sinif/1.3">CRN: 12003</a></li></ul></li>'
+                '</ul></div>')
+
+    def test_grouped_years_and_single_class_lists_are_complete(self):
+        self.app._client.get_html.return_value = (
+            self.grouped_cards(), SimpleNamespace(url=BASE + '/Kampus1'))
+        result = self.app.list_courses(refresh=True)
+        self.assertEqual(result['count'], 3)
+        self.assertEqual(result['enrollment_coverage'],
+                         {'status': 'complete', 'reason': 'verified_course_cards'})
+        self.assertNotIn('parse_warning', result)
+        self.assertEqual({c['url'] for c in self.app._course_cache.get('courses')},
+                         {BASE + '/Sinif/1.' + str(n) for n in (1, 2, 3)})
+
+    def test_incomplete_grouped_refresh_cannot_remove_a_known_class(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.app.tracking_state_path = Path(directory) / 'tracking.json'
+            self.app._collect_course_snapshot = lambda course, **kwargs: {**snapshot(), 'course': course}
+            self.app._client.get_html.return_value = (
+                self.grouped_cards(), SimpleNamespace(url=BASE + '/Kampus1'))
+            self.app.sync_all_courses()
+            malformed = self.grouped_cards().replace(
+                '<li><a href="/Sinif/1.2">Internship 2025</a></li>', '<li>Unavailable class</li>')
+            self.app._client.get_html.return_value = (malformed, SimpleNamespace(url=BASE + '/Kampus1'))
+            result = self.app.sync_all_courses()
+            self.assertEqual(result['updates'], [])
+            self.assertEqual(len(load_tracking_state(self.app.tracking_state_path)['courses']), 3)
+            self.assertEqual(len(self.app._course_cache.get('courses')), 3)
+
+    def test_grouped_lists_retain_missing_duplicate_and_ambiguous_card_guards(self):
+        good = self.grouped_cards()
+        cases = [
+            good.replace('<li><a href="/Sinif/1.2">Internship 2025</a></li>', '<li>Unavailable class</li>'),
+            good.replace('/Sinif/1.2', '/Sinif/1.1'),
+            good.replace('/Sinif/1.2', 'https://evil.example/Sinif/1.2'),
+            good.replace('<span>ITU 401</span>', '<a href="/Sinif/1.4">Other class</a>'),
+            good.replace('<span>ITU 401</span>', '<span>ITU 401</span><ul></ul>'),
+            good.replace('</div>', '<a href="/Sinif/1.4">Outside inventory</a></div>'),
+            good + '<a href="?page=2">Next</a>',
+            good + '<input type="password">',
+        ]
+        for html in cases:
+            with self.subTest(html=html):
+                self.app._client.get_html.return_value = (html, SimpleNamespace(url=BASE + '/Kampus1'))
+                result = self.app.list_courses(refresh=True)
+                self.assertNotEqual(result['enrollment_coverage']['status'], 'complete')
+                self.assertIn('parse_warning', result)
+
     def test_compact_default_does_not_truncate_internal_enrollment(self):
         html = '<h1>Dersler</h1>' + "".join(f'<a href="/Sinif/1.{n}">UCK {100+n}E</a>' for n in range(25))
         self.app._client.get_html.return_value = (html, SimpleNamespace(url=BASE + "/Kampus1"))

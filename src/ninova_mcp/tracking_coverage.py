@@ -89,14 +89,30 @@ def enrollment_coverage(html: str, page_url: str, expected_url: str, courses: li
         # card rather than treating any successfully parsed link as a full list.
         inventories = []
         for container in soup.find_all("ul"):
+            # Nested lists belong to their outer course inventory. A course
+            # can group several class/year leaves under the same heading.
+            if container.find_parent("ul") is not None:
+                continue
             cards = container.find_all("li", recursive=False)
             if not any(is_course_root(urljoin(page_url, str(a["href"])))
                        for card in cards for a in card.find_all("a", href=True)):
                 continue
             urls = []
-            for card in cards:
+            pending = list(cards)
+            while pending:
+                card = pending.pop()
+                children = card.find_all("ul", recursive=False)
                 identities = {urljoin(page_url, str(a["href"])) for a in card.find_all("a", href=True)
-                              if is_course_root(urljoin(page_url, str(a["href"])))}
+                              if a.find_parent("li") is card
+                              and is_course_root(urljoin(page_url, str(a["href"])))}
+                if children:
+                    leaves = [leaf for child in children for leaf in child.find_all("li", recursive=False)]
+                    # Mixed links/groups or an empty group cannot prove a
+                    # complete inventory. Every class leaf is checked below.
+                    if identities or not leaves or any(not child.find_all("li", recursive=False) for child in children):
+                        return coverage("partial", "unparsed_course_cards")
+                    pending.extend(leaves)
+                    continue
                 if len(identities) != 1:
                     return coverage("partial", "unparsed_course_cards")
                 url = identities.pop()
