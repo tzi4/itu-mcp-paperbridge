@@ -10,6 +10,9 @@ uses its owner's university access and local document archive.
 | --- | --- |
 | Research tools and DOI resolution | Available in the MCP tool registry |
 | Crossref metadata discovery | Available when requested; search is not a download |
+| Combined Crossref / OpenAlex discovery | Available with `papers_search(discovery="combined")`; bounded results with per-source status |
+| Official research-resource directory | Available through `papers_resources`; entry links do not verify article access |
+| Subscription literature discovery | Experimental, disabled until `PAPERBRIDGE_LIBRARY_SEARCH=1` and a managed browser are configured |
 | Unpaywall discovery | Requires your own contact email |
 | Local archived text and PDF pages | Available for documents with recorded external-model permission |
 | IEEE / Springer browser retrieval | Disabled until a browser engine is configured |
@@ -34,6 +37,42 @@ Protect that directory using your OS account and file permissions. It contains
 original documents and extracted text in a private SQLite archive. Keep it out
 of Git, public shares and backups intended for distribution. This is a
 single-user application, not a shared multi-user service.
+
+## Finding research material
+
+`papers_search` can combine complementary metadata indexes using
+`discovery="combined"`. Select a year range with `year_from` and `year_to`,
+a publication `kind`, and `order="relevance"`, `"recent"` or `"citations"`.
+DOIs are normalized and deduplicated. Results identify their sources, and
+individual source failures remain visible. Citation counts come from different
+indexes and are not directly comparable. Ordering and filtering cover bounded
+source windows, so results are not an exhaustive literature review. Existing
+calls retain Crossref discovery, and `local_only=true` contacts no index.
+
+`papers_resources` searches the official ITU Library directory by topic or
+subject. It returns resource descriptions and public/institutional entry links.
+A directory entry does not establish entitlement to a particular paper, enable
+a publisher adapter, or grant permission to process its contents.
+
+Search results keep discovery titles and their provenance when a matching
+authorized archive entry is available. The archive label appears separately as
+`archive_title`. Text responses include `metadata.delivery` for the current
+call: archive reads report `network_retrieval=false`; provider delivery leaves
+that field unknown rather than assuming what a custom provider downloaded.
+
+`papers_library_query` uses the configured institutional browser for an
+operator-enabled subscription search. The current experimental route targets
+ProQuest records. Results are titles, dates, authors, snippets and any DOI
+actually present. They are metadata, not downloaded documents. Year and
+peer-review filters apply conservatively to one visible results page. Unsupported
+page layouts and human checks produce explicit failures. Authenticated results
+must be verified in the operator's actual account before relying on this route.
+
+The subscription route stores its request budget and short-lived result cache
+in the private archive. The UTC budget is 30 submitted searches per day, with
+at least 15 seconds between submissions. Counts survive restarts and are shared
+across processes using that archive. Cached answers do not submit another
+search. Credentials remain server-side and are never tool parameters.
 
 ## Optional institutional retrieval
 
@@ -111,12 +150,15 @@ not proof of a paywall. Existing authorized archive entries remain readable.
 | --- | --- |
 | `PAPERBRIDGE_DATA_DIR` | Your private archive directory |
 | `PAPERBRIDGE_CONTACT_EMAIL` | Your contact email for metadata APIs; do not copy someone else's |
+| `PAPERBRIDGE_OPENALEX_KEY` | Optional private API key for OpenAlex discovery; sent in an authorization header |
+| `PAPERBRIDGE_LIBRARY_SEARCH` | Set to `1` to enable the experimental institutional literature search; default off |
 | `PAPERBRIDGE_BROWSER_ENGINE` | `chromium` or `firefox`; unset means no managed retrieval |
 | `PAPERBRIDGE_BROWSER_HEADLESS` | `1` by default; `0` requires a server display |
 | `PAPERBRIDGE_CHROMIUM_EXECUTABLE` | Optional absolute path to your provisioned full Chromium |
 | `PAPERBRIDGE_BROWSER_IDLE_SECONDS` | Default 90; idle browser cleanup, not a per-request deadline |
 | `PAPERBRIDGE_SPRINGER_BROWSER_ENGINE` | Optional Springer override; otherwise inherits the common engine |
 | `PAPERBRIDGE_PUBLISHER_PROXY` | Optional pre-existing loopback HTTP CONNECT proxy; creates no proxy or VPN |
+| `PAPERBRIDGE_OPENATHENS_PUBLISHER_PROXY` | Set to `1` to use that proxy for OpenAthens browser sessions and PDF requests. Extend its allowlist first. Missing or invalid configuration fails without a direct retry. Restart the process after changing proxy settings. |
 | `PAPERBRIDGE_VISUAL_PROBE` | Opt-in synthetic client image diagnostic |
 
 Use `papers_get_text` for the relevant excerpts and follow `next_id` when more

@@ -17,6 +17,10 @@ from typing import Annotated, Any, Callable, Literal
 from urllib.parse import urlparse
 
 from pydantic import Field, StrictBool
+from paperbridge.research_schema import (
+    DiscoverySource, LibraryQuery, ResearchKind, ResearchLimit, ResearchOrder,
+    ResearchYear, ResourceLimit, ResourceQuery, ResourceSubject, SearchQuery,
+)
 
 from .cache import TtlCache, parse_ttl_seconds
 from .client import NinovaAuthError, NinovaClient, NinovaError
@@ -90,7 +94,7 @@ from .tool_router import (
 )
 
 SERVER_NAME = "itu-mcp"
-SERVER_VERSION = "0.7.6.post1.dev18"
+SERVER_VERSION = "0.7.6.post1.dev19"
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 DEFAULT_COURSE_CACHE_TTL_SECONDS = 60.0
 COURSES_CACHE_KEY = "courses"
@@ -415,8 +419,23 @@ class NinovaMcpApp:
                     self._papers = PapersClient(self.state_dir)
         return self._papers
 
-    def papers_search(self, query: str, limit: int = 10, local_only: bool = False) -> dict[str, Any]:
-        return self.papers.call("search", query, limit, local_only=local_only)
+    def papers_search(self, query: SearchQuery, limit: ResearchLimit = 10, local_only: StrictBool = False,
+                      year_from: ResearchYear | None = None, year_to: ResearchYear | None = None,
+                      order: ResearchOrder = "relevance", kind: ResearchKind | None = None,
+                      discovery: DiscoverySource = "crossref") -> dict[str, Any]:
+        return self.papers.call("search", query, limit, local_only=local_only,
+                                year_from=year_from, year_to=year_to, order=order,
+                                kind=kind, discovery=discovery)
+
+    def papers_resources(self, query: ResourceQuery = "", subject: ResourceSubject | None = None,
+                         limit: ResourceLimit = 10) -> dict[str, Any]:
+        return self.papers.call("resources", query=query, subject=subject, limit=limit)
+
+    def papers_library_query(self, query: LibraryQuery, year_from: ResearchYear | None = None,
+                             year_to: ResearchYear | None = None, reviewed_only: StrictBool = False,
+                             limit: ResearchLimit = 10) -> dict[str, Any]:
+        return self.papers.call("library_query", query, year_from=year_from, year_to=year_to,
+                                reviewed_only=reviewed_only, limit=limit)
 
     def papers_resolve(self, doi: str) -> dict[str, Any]:
         return self.papers.call("resolve", doi)
@@ -6873,7 +6892,8 @@ def _tool_registration(app: NinovaMcpApp, name: str,
     # Resolve the write tool's strict types without changing legacy output
     # schemas, which FastMCP derives differently from postponed annotations.
     guarded_result.__signature__ = inspect.signature(  # type: ignore[attr-defined]
-        fn, eval_str=name in OBS_REGISTRATION_WRITE_TOOL_NAMES,
+        fn, eval_str=name in OBS_REGISTRATION_WRITE_TOOL_NAMES or name in {
+            "papers_search", "papers_resources", "papers_library_query"},
     )
     return guarded_result, {
         "name": name,
@@ -6883,7 +6903,7 @@ def _tool_registration(app: NinovaMcpApp, name: str,
             title=meta.get("title"),
             readOnlyHint=name not in STATEFUL_TOOL_NAMES,
             destructiveHint=name in DESTRUCTIVE_TOOL_NAMES,
-            idempotentHint=name not in STATEFUL_TOOL_NAMES,
+            idempotentHint=name not in STATEFUL_TOOL_NAMES and name != "papers_library_query",
             # Most tools contact an İTÜ or configured community service.
             # Keeping this true prevents clients from treating those
             # network reads as closed-world/local computation.

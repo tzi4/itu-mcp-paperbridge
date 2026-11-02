@@ -140,7 +140,7 @@ class PageBatchTests(unittest.TestCase):
                 const msg = event.data;
                 const reply = result => child.postMessage({jsonrpc:'2.0',id:msg.id,result}, '*');
                 if (msg.method === 'ui/initialize') reply({protocolVersion:'2026-01-26',
-                  hostInfo:{name:'test', version:'1'},hostCapabilities:{message:{}}});
+                  hostInfo:{name:'test', version:'1'},hostCapabilities:{message:{text:{},image:{}}}});
                 if (msg.method === 'ui/message') { window.messages.push(msg); reply({}); }
               });
             }""")
@@ -190,7 +190,7 @@ class PageBatchTests(unittest.TestCase):
             uploads = frame.evaluate('window.uploads')
             self.assertEqual(len(uploads), 3 if fail_second else 2)
             self.assertEqual(uploads.count('paperbridge-selection-1-page-1.png'), 1)
-            self.assertEqual(frame.evaluate('window.reads'), [1, 2, 2] if fail_second else [1, 2])
+            self.assertEqual(frame.evaluate('window.reads'), [1, 2, 2, 1] if fail_second else [1, 2])
             self.assertEqual(frame.locator('img').count(), 2)
             reads = frame.evaluate('window.reads')
             frame.set_content(html)

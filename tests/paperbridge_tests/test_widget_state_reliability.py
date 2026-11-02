@@ -9,8 +9,8 @@ from paperbridge_tests.test_page_batch import fixture, PNG
 
 
 class ResourceRevisionTests(unittest.TestCase):
-    def test_resource_revision_identifies_flexible_batch_pages(self):
-        self.assertEqual(viewer.PAGE_VIEW_URI, 'ui://paperbridge/page-viewer-v12.html')
+    def test_resource_revision_identifies_explicit_image_messages(self):
+        self.assertEqual(viewer.PAGE_VIEW_URI, 'ui://paperbridge/page-viewer-v13.html')
 
 
 @unittest.skipUnless(os.environ.get('PAPERBRIDGE_BROWSER_TESTS') == '1', 'Opt-in UI browser test')
@@ -55,7 +55,7 @@ class WidgetStateReliabilityTests(unittest.TestCase):
             const msg = event.data;
             const reply = body => child.postMessage({jsonrpc:'2.0',id:msg.id,...body}, '*');
             if (msg.method === 'ui/initialize') reply({result:{protocolVersion:'2026-01-26',
-              hostInfo:{name:'synthetic', version:'1'},hostCapabilities:{message:{text:{}}}}});
+              hostInfo:{name:'synthetic', version:'1'},hostCapabilities:{message:{text:{},image:{}}}}});
             if (msg.method === 'ui/message') {
               window.messages.push(msg);
               window.messageStates.push(JSON.parse(JSON.stringify(child.openai.widgetState)));
@@ -131,6 +131,12 @@ class WidgetStateReliabilityTests(unittest.TestCase):
                 self.assertEqual(final['privateContent']['paperbridge']['phase'], 'followup_attempted')
                 self.assertTrue(final['privateContent']['paperbridge']['followUpAttempted'])
                 self.assertEqual(page.evaluate('window.messageStates'), [final])
+                content = page.evaluate('window.messages[0].params.content')
+                self.assertEqual(content[0]['type'], 'text')
+                self.assertIn(final['modelContent'], content[0]['text'])
+                self.assertEqual(content[1:], [dict(type='image', mimeType='image/png',
+                    data=base64.b64encode(PNG).decode())] * count)
+                self.assertNotIn(base64.b64encode(PNG).decode(), content[0]['text'])
                 self.assertEqual(final['privateContent']['paperbridge']['fileIds'], final['imageIds'])
                 self.assertIsInstance(final['modelContent'], str)
                 self.assertEqual(final['modelContent'].splitlines()[1:count + 1], [
@@ -154,6 +160,25 @@ class WidgetStateReliabilityTests(unittest.TestCase):
         self.assertEqual(page.evaluate('window.messages.length'), 1)
         self.assertEqual(frame.evaluate('window.savedStates.length'), 4)
         self.assert_uploads_unchanged(frame, 3)
+
+    def test_manual_add_guides_continue_and_only_continue_sends_image_blocks(self):
+        for count in (1, 3):
+            with self.subTest(count=count):
+                page, frame = self.widget(count=count, automatic=False)
+                frame.get_by_role('button', name='Add pages to chat' if count > 1 else 'Add page to chat').click()
+                frame.get_by_role('button', name='Pages uploaded' if count > 1 else 'Page uploaded').wait_for()
+                label = 'Continue with these pages' if count > 1 else 'Continue with this page'
+                self.assertIn('Use ' + label + ' once to send the selected image blocks', frame.locator('#status').inner_text())
+                self.assertIn('Continue sends the selected image blocks', frame.locator('#continue-help').inner_text())
+                self.assertEqual(page.evaluate('window.messages.length'), 0)
+                frame.get_by_role('button', name=label).click()
+                self.wait_result(frame, 'After-button: Host acknowledged ui/message')
+                self.assertEqual(page.evaluate('window.messages.length'), 1)
+                self.assertEqual(page.evaluate('window.messages[0].params.content.slice(1)'),
+                    [dict(type='image', mimeType='image/png', data=base64.b64encode(PNG).decode())] * count)
+                self.assert_uploads_unchanged(frame, count)
+                frame.evaluate('document.getElementById("continue").dispatchEvent(new Event("click"))')
+                self.assertEqual(page.evaluate('window.messages.length'), 1)
 
     def test_retained_partial_snapshots_do_not_gain_later_file_ids(self):
         _, frame = self.widget()

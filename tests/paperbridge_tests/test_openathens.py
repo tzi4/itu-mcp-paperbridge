@@ -104,6 +104,10 @@ class FakeContext:
 
 class OpenAthensTests(unittest.TestCase):
     def setUp(self):
+        environment = patch.dict(os.environ, {"PAPERBRIDGE_OPENATHENS_PUBLISHER_PROXY": "0",
+                                              "PAPERBRIDGE_PUBLISHER_PROXY": ""})
+        environment.start()
+        self.addCleanup(environment.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.store = DocumentStore(Path(self.temp.name))
@@ -158,6 +162,32 @@ class OpenAthensTests(unittest.TestCase):
         self.assertTrue(page.closed)
         self.runner.run.assert_called_once()
         self.assertIs(self.runner.run.call_args.kwargs["use_publisher_proxy"], False)
+
+    def test_explicit_proxy_routes_the_whole_openathens_session(self):
+        with patch.dict(os.environ, {"PAPERBRIDGE_OPENATHENS_PUBLISHER_PROXY": "1",
+                                    "PAPERBRIDGE_PUBLISHER_PROXY": "http://127.0.0.1:18888"}):
+            self.provider.retrieve(PAPER)
+        self.assertIs(self.runner.run.call_args.kwargs["use_publisher_proxy"], True)
+        self.assertEqual(self.context.pages[0].submissions, 1)
+        self.assertEqual(self.scenario["downloads"], [PDF_URL])
+
+    def test_opted_in_proxy_misconfiguration_never_runs_direct(self):
+        for flag, endpoint in (("1", ""), ("1", "http://remote.test:18888"),
+                               ("true", "http://127.0.0.1:18888")):
+            with self.subTest(flag=flag, endpoint=endpoint), patch.dict(os.environ, {
+                    "PAPERBRIDGE_OPENATHENS_PUBLISHER_PROXY": flag, "PAPERBRIDGE_PUBLISHER_PROXY": endpoint}):
+                with self.assertRaisesRegex(RetrievalUnavailable, "openathens_proxy_"):
+                    self.provider.retrieve(PAPER)
+                self.runner.run.assert_not_called()
+
+    def test_proxy_failure_is_not_retried_on_the_default_route(self):
+        self.runner.run.side_effect = RetrievalUnavailable("browser_interaction_required")
+        with patch.dict(os.environ, {"PAPERBRIDGE_OPENATHENS_PUBLISHER_PROXY": "1",
+                                    "PAPERBRIDGE_PUBLISHER_PROXY": "http://127.0.0.1:18888"}):
+            with self.assertRaisesRegex(RetrievalUnavailable, "browser_interaction_required"):
+                self.provider.retrieve(PAPER)
+        self.runner.run.assert_called_once()
+        self.assertIs(self.runner.run.call_args.kwargs["use_publisher_proxy"], True)
 
     def test_existing_session_skips_the_login(self):
         self.scenario["first"] = ARTICLE

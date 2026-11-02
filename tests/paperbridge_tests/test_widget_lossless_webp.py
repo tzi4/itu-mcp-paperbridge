@@ -134,7 +134,7 @@ class WidgetWebpBrowserTests(unittest.TestCase):
         cls.browser.close()
         cls.driver.stop()
 
-    def widget(self, images, *, reject=False, fail_second=False):
+    def widget(self, images, *, reject=False, fail_second=False, mutate=None):
         info = prepared(b"")
         info.pop("image_bytes")
         info.update(view_request_id="a" * 32, automatic=True, continuation_delay_seconds=0, continuation_transport="mcp_apps")
@@ -153,23 +153,29 @@ class WidgetWebpBrowserTests(unittest.TestCase):
             if (event.source !== child || event.data?.jsonrpc !== '2.0') return;
             const msg = event.data;
             const reply = result => child.postMessage({jsonrpc:'2.0', id:msg.id, result}, '*');
-            if (msg.method === 'ui/initialize') reply({protocolVersion:'2026-01-26', hostInfo:{name:'synthetic',version:'1'}, hostCapabilities:{message:{}}});
+            if (msg.method === 'ui/initialize') reply({protocolVersion:'2026-01-26', hostInfo:{name:'synthetic',version:'1'}, hostCapabilities:{message:{text:{},image:{}}}});
             if (msg.method === 'ui/message') { window.messages.push(msg); reply({}); }
           });
         }""")
         frame = page.frames[1]
-        frame.evaluate("""({meta,reject,failSecond}) => {
+        frame.evaluate("""({meta,reject,failSecond,mutate}) => {
           window.uploads = []; window.states = [];
           window.openai = {toolResponseMetadata:meta,
             uploadFile: async file => {
               const data = Array.from(new Uint8Array(await file.arrayBuffer()));
               window.uploads.push({name:file.name, type:file.type, data});
               if (reject || (failSecond && window.uploads.length === 2)) throw new Error('Synthetic unsupported file');
+              const images = meta['paperbridge/images'] || [meta['paperbridge/image']];
+              if (window.uploads.length === images.length) {
+                if (mutate === 'invalid') images[0].data = 'not-base64';
+                if (mutate === 'budget') for (const image of images)
+                  image.data = btoa(atob(image.data) + 'x'.repeat(4000000));
+              }
               return {fileId:'file_fixture_' + window.uploads.length};
             },
             setWidgetState: state => { window.openai.widgetState = state; window.states.push(state); }
           };
-        }""", {"meta": meta, "reject": reject, "failSecond": fail_second})
+        }""", {"meta": meta, "reject": reject, "failSecond": fail_second, "mutate": mutate})
         frame.set_content(self.html)
         return page, frame
 
@@ -193,9 +199,11 @@ class WidgetWebpBrowserTests(unittest.TestCase):
         self.assertEqual(state["privateContent"]["paperbridge"]["fileIds"], state["imageIds"])
         self.assertNotIn("file_fixture_", state["modelContent"])
         self.assertNotIn("file_mime_type", state["modelContent"])
+        content = page.evaluate("window.messages[0].params.content")
+        self.assertEqual(content[1:], [dict(type="image", **image) for image in images])
         for image in images:
             self.assertNotIn(image["data"], json.dumps(state))
-            self.assertNotIn(image["data"], json.dumps(page.evaluate("window.messages")))
+            self.assertNotIn(image["data"], content[0]["text"])
         frame.set_content(self.html)
         frame.wait_for_timeout(100)
         self.assertEqual(frame.evaluate("window.uploads"), uploads)
@@ -218,6 +226,20 @@ class WidgetWebpBrowserTests(unittest.TestCase):
         self.assertEqual([row["name"] for row in frame.evaluate("window.uploads")], ["paperbridge-page-1.webp"])
         self.assertEqual(page.evaluate("window.messages.length"), 0)
         self.assertEqual(frame.evaluate("window.openai.widgetState.imageIds"), [])
+
+    def test_explicit_message_revalidates_image_bytes_and_aggregate_budget(self):
+        for mode, count in (("invalid", 1), ("budget", 2)):
+            with self.subTest(mode=mode):
+                page, frame = self.widget([self.image(False) for _ in range(count)], mutate=mode)
+                frame.wait_for_function("document.getElementById('continuation-result').textContent.includes("
+                                        "'Automatic: Selected image bytes could not be validated or loaded')")
+                self.assertEqual(page.evaluate("window.messages.length"), 0)
+                self.assertEqual(frame.evaluate("window.uploads.length"), count)
+                frame.evaluate("window.dispatchEvent(new Event('pagehide'))")
+                frame.set_content(self.html)
+                frame.wait_for_timeout(100)
+                self.assertEqual(page.evaluate("window.messages.length"), 0)
+                self.assertEqual(frame.evaluate("window.uploads.length"), count)
 
     def test_mismatched_mime_and_invalid_signatures_never_upload(self):
         webp, png = self.image(True), self.image(False)

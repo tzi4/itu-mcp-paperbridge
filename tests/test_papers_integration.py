@@ -255,7 +255,7 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(batch.structuredContent["pages"][0]["widget_image_encoding"],
                                      "native_png_widget_fetch")
                     self.assertEqual(batch.structuredContent["continuation_transport"], "mcp_apps")
-                    resource = await session.read_resource("ui://paperbridge/page-viewer-v12.html")
+                    resource = await session.read_resource("ui://paperbridge/page-viewer-v13.html")
                     self.assertIn("Add page to chat", resource.contents[0].text)
                     probe = await session.call_tool("papers_visual_probe", {})
                     self.assertFalse(probe.isError)

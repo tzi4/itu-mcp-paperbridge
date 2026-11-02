@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "itu-mcp"
-version = "0.7.6.post1.dev18"
+version = "0.7.6.post1.dev19"
 description = "MCP server for ITU Ninova, OBS, Portal, campus services and library: courses, grades, schedules, planning and more."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -36,6 +36,7 @@ dependencies = [
   "mcp>=1.29.0,<2",
   "pypdf>=5,<7",
   "python-docx>=1.1.0",
+  "defusedxml>=0.7.1,<1",
   "requests>=2.32,<3",
   "starlette>=0.37.2",
   "tzdata>=2024.1; sys_platform == 'win32'",

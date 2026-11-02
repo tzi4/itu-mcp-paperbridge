@@ -1,4 +1,4 @@
-"""A PDF page preview using the tested ChatGPT widget file attachment path."""
+"""A PDF preview with explicit MCP Apps image messages and widget compatibility."""
 import base64
 import io
 import json
@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from uuid import uuid4
 
-PAGE_VIEW_URI = "ui://paperbridge/page-viewer-v12.html"
+PAGE_VIEW_URI = "ui://paperbridge/page-viewer-v13.html"
 
 
 def _encode_lossless_webp(data: bytes):
@@ -78,7 +78,8 @@ def page_view_result(result: dict, automatic: bool = False, continuation_delay_s
                     widget_image_byte_count=len(data),
                     automatic=automatic, view_request_id=uuid4().hex,
                     automatic_delivery="requested_not_verified" if automatic else "not_requested",
-                    attachment_method="chatgpt_widget_file", model_visual_access="not_verified",
+                    attachment_method=("mcp_apps_image_content" if continuation_transport == "mcp_apps"
+                                       else "chatgpt_widget_file"), model_visual_access="not_verified",
                     status_scope="initial_server_response_not_live_client_state",
                     continuation_check="manual_after_reply_available",
                     continuation_transport=continuation_transport,
@@ -89,7 +90,10 @@ def page_view_result(result: dict, automatic: bool = False, continuation_delay_s
                                  "End the initial reply briefly so the later continuation can be tested. "
                                  "do not call this tool again to poll. If it cannot continue, use the preview's manual fallback."
                                  if automatic else
-                                 "Use Add page to chat in the preview, then ask about that page in a new message."))
+                                 "Use Add page to chat in the preview, then Continue with this page once after "
+                                 "the current reply finishes. With MCP Apps, Continue sends the selected image "
+                                 "block with the message. Add alone does not send that message. "
+                                 "Actual visual access still depends on the client."))
     return CallToolResult(
         content=[TextContent(type="text", text=json.dumps(metadata, ensure_ascii=False))],
         structuredContent=metadata,
@@ -127,6 +131,9 @@ def pages_view_result(result: dict, automatic: bool = False, continuation_delay_
                     next_action="Read the selection coverage. The preview will load the prepared local pages "
                     "through papers_get_page before attempting their attachment together. "
                     "With automatic=true end the initial reply briefly; the preview attempts one continuation. "
+                    "For manual delivery, use Add pages to chat, then Continue with these pages once after "
+                    "the current reply finishes. Continue sends the selected image blocks with the message. "
+                    "Add alone does not send that message. "
                     "Do not poll or repeat this pending batch. After its delivery, request still-needed selections "
                     "deferred by the image-byte budget in a later batch. Do not automatically retry permission, "
                     "rendering or acquisition failures. Choose only pages needed for the answer. "

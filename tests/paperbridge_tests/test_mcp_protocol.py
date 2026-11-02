@@ -31,8 +31,14 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
                     await session.initialize()
                     tools = await session.list_tools()
                     self.assertEqual({t.name for t in tools.tools},
-                                     {"search", "fetch", "papers_resolve", "papers_status", "papers_get_page", "papers_view_page"})
+                                     {"search", "fetch", "papers_search", "papers_resources", "papers_library_query",
+                                      "papers_resolve", "papers_status", "papers_get_page", "papers_view_page"})
                     self.assertTrue(all(t.annotations.readOnlyHint for t in tools.tools))
+                    local = await session.call_tool("papers_search", {
+                        "query": "rocket", "local_only": True, "discovery": "combined"})
+                    local_body = json.loads(next(c.text for c in local.content if c.type == "text"))
+                    self.assertEqual(local_body["scope"], "local_archive")
+                    self.assertEqual(local_body["results"][0]["first_chunk_id"], item["first_chunk_id"])
                     result = await session.call_tool("fetch", {"id": item["first_chunk_id"]})
                     self.assertFalse(result.isError)
                     body = json.loads(next(c.text for c in result.content if c.type == "text"))

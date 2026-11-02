@@ -40,6 +40,11 @@ class PaperBridge:
         self.institution = institution
         self.provider = provider
         self.providers = [provider] if provider is not None else []
+        self._literature = None
+        self._literature_metadata = None
+        self._resources = None
+        self._library_search = None
+        self._library_runner = None
         config = _browser_configuration()
         if self.provider is None and config["enabled"]:
             from .browser import browser_port
@@ -50,6 +55,7 @@ class PaperBridge:
                 from .managed_browser import ManagedBrowser
                 from .springer import SpringerBrowserProvider
                 runner = ManagedBrowser(browser_engine=config["engine"], headless=config["headless"])
+                self._library_runner = runner
                 self.provider = IeeeBrowserProvider(store, None, login=login, runner=runner)
                 springer_login = ((lambda session, url: institution.authenticate_springer(session, url, credentials))
                                  if institution and credentials else None)
@@ -63,37 +69,145 @@ class PaperBridge:
                 self.provider = IeeeBrowserProvider(store, browser_port(config["port"]), login=login)
                 self.providers = [self.provider]
 
-    def search(self, query: str, limit: int = 10, *, local_only: bool = False) -> dict:
+    def search(self, query: str, limit: int = 10, *, local_only: bool = False,
+               year_from: int | None = None, year_to: int | None = None,
+               order: str = "relevance", kind: str | None = None,
+               discovery: str = "crossref") -> dict:
         if type(local_only) is not bool:
             raise ValueError("local_only must be a boolean.")
-        local = self.store.search(query, limit)
+        if not isinstance(query, str) or not query.strip() or len(query) > 1000:
+            raise ValueError("Use a nonempty query of at most 1000 characters.")
+        if type(limit) is not int or not 1 <= limit <= 20:
+            raise ValueError("limit must be an integer from 1 to 20.")
+        if not isinstance(discovery, str) or discovery not in {"crossref", "openalex", "combined"}:
+            raise ValueError("Select crossref, openalex or combined discovery.")
+        if not isinstance(order, str) or order not in {"relevance", "recent", "citations"}:
+            raise ValueError("Select relevance, recent or citations ordering.")
+        for year in (year_from, year_to):
+            if year is not None and (type(year) is not int or not 1000 <= year <= 2100):
+                raise ValueError("Years must be integers from 1000 to 2100.")
+        if year_from is not None and year_to is not None and year_from > year_to:
+            raise ValueError("The first year cannot exceed the last year.")
+        if kind is not None and (not isinstance(kind, str) or kind not in {
+                "article", "review", "book-chapter", "dissertation", "preprint"}):
+            raise ValueError("Unsupported publication kind.")
+        authorized = self.store.search(query, limit)
+        # Keep authorized matches for joining to filtered discovery metadata.
+        # Their archive rows alone cannot establish a publication year or kind.
+        cached = {entry["url"]: entry for entry in authorized}
+        local = authorized
+        if year_from is not None or year_to is not None or kind is not None:
+            # Undated archive entries cannot certify a requested year range.
+            local = [entry for entry in local if
+                     (year_from is None or type(entry.get("year")) is int and entry["year"] >= year_from)
+                     and (year_to is None or type(entry.get("year")) is int and entry["year"] <= year_to)
+                     and (kind is None or entry.get("kind") == kind)]
         results = local
         warnings = []
+        source_details = {}
         discovery_status = "not_requested"
         if not local_only:
             try:
-                metadata = self.discovery.search(query, limit)
-                discovery_status = "completed"
+                enhanced = discovery != "crossref" or year_from is not None or year_to is not None or order != "relevance" or kind is not None
+                if enhanced:
+                    from .literature import LiteratureSearch
+                    if self._literature is None or self._literature_metadata is not self.discovery:
+                        self._literature = LiteratureSearch(self.discovery)
+                        self._literature_metadata = self.discovery
+                    report = self._literature.search(query, limit, year_from=year_from, year_to=year_to,
+                                                     order=order, kind=kind, source=discovery)
+                    metadata = report["results"]
+                    warnings.extend(report.get("warnings", []))
+                    source_details = report.get("sources", {})
+                    statuses = [info.get("status") for info in source_details.values()
+                                if info.get("status") != "disabled"]
+                    discovery_status = ("unavailable" if "completed" not in statuses else
+                                        "partial" if "unavailable" in statuses else "completed")
+                else:
+                    metadata = self.discovery.search(query, limit)
+                    discovery_status = "completed"
                 # Metadata and full-text rankings are not comparable scores.
                 # Interleave their distinct sources, beginning with discovery so
                 # even limit=1 is not permanently confined to the old archive.
-                cached = {entry["url"]: entry for entry in local}
+                metadata = [self._archive_search_hit(entry, cached[entry["url"]])
+                            if entry["url"] in cached else entry for entry in metadata]
+                discovered_urls = {entry["url"] for entry in metadata}
+                # A duplicate archive hit must not hide discovery metadata or
+                # move its result ahead of the provider's relevance ranking.
+                remaining_local = [entry for entry in local if entry["url"] not in discovered_urls]
                 results, seen = [], set()
-                for pair in zip_longest(metadata, local):
+                for pair in zip_longest(metadata, remaining_local):
                     for entry in pair:
                         if entry is not None and entry["url"] not in seen:
                             seen.add(entry["url"])
-                            results.append(cached.get(entry["url"], entry))
-                results = results[:limit]
+                            results.append(entry)
             except DiscoveryError as exc:
                 discovery_status = "unavailable"
                 warnings.append(str(exc))
-        results = [dict(entry, access=self.access_details(entry)) for entry in results]
-        return {"results": results, "warnings": warnings,
+        def coverage_rank(entry):
+            terms = entry.get("query_match", {}).get("matched_terms", [])
+            return len(terms) if isinstance(terms, list) else 0
+
+        if order == "recent":
+            results.sort(key=lambda entry: (-coverage_rank(entry),
+                         -(entry.get("year") if type(entry.get("year")) is int else 0)))
+        elif order == "citations":
+            results.sort(key=lambda entry: (-coverage_rank(entry),
+                         -(entry.get("citation_count") if type(entry.get("citation_count")) is int else -1)))
+        results = [dict(entry, access=self.access_details(entry)) for entry in results[:limit]]
+        return {"results": results, "warnings": warnings, "discovery_sources": source_details,
                 "metadata_discovery": discovery_status,
                 "scope": "local_archive" if local_only else "local_archive_and_metadata",
                 "notice": "Search results do not mean full text has been read. For a complete local reading, "
                           "start at first_chunk_id and follow next_id until null."}
+
+    @staticmethod
+    def _archive_search_hit(paper: dict, archived: dict) -> dict:
+        """Keep discovery evidence intact while exposing authorized reading IDs."""
+        result = dict(paper)
+        provenance = dict(paper.get("field_sources", {}))
+        # The displayed discovery title still describes query_match.title_terms.
+        # The archive's operator-supplied title and chunk label stay separate.
+        if "title" in archived:
+            result["archive_title"] = archived["title"]
+            provenance["archive_title"] = "local_archive"
+        for field in ("id", "first_chunk_id", "content_level", "storage", "full_text_read"):
+            if field in archived:
+                result[field] = archived[field]
+                provenance[field] = "local_archive"
+        result["field_sources"] = provenance
+        return result
+
+    @staticmethod
+    def _text_delivery(result: dict, source: str) -> dict:
+        """Describe this response's path, without persisting document provenance."""
+        metadata = result.get("metadata")
+        if not isinstance(metadata, dict):
+            # Preserve provider error envelopes that contain no document metadata.
+            return result
+        return {**result, "metadata": {**metadata, "delivery": {
+            "source": source,
+            "network_retrieval": False if source == "authorized_archive" else None,
+        }}}
+
+    def resources(self, query: str = "", subject: str | None = None, limit: int = 10) -> dict:
+        """Find official research-resource entries without asserting entitlement."""
+        if self._resources is None:
+            from .research_resources import ResearchResources
+            self._resources = ResearchResources()
+        return self._resources.search(query=query, subject=subject, limit=limit)
+
+    def library_query(self, query: str, year_from: int | None = None, year_to: int | None = None,
+                      reviewed_only: bool = False, limit: int = 10) -> dict:
+        """Search the operator-enabled subscription discovery route."""
+        from .browser import RetrievalUnavailable
+        from .subscription_search import SubscriptionSearch
+        if self._library_runner is None:
+            raise RetrievalUnavailable("browser_session_not_configured")
+        if self._library_search is None:
+            self._library_search = SubscriptionSearch(self._library_runner, state_dir=self.store.root / "library-discovery")
+        return self._library_search.search(query, year_from=year_from, year_to=year_to,
+                                          reviewed_only=reviewed_only, limit=limit)
 
     def access_details(self, paper: dict) -> dict:
         cached = paper.get('content_level') == 'local_chunk_available' and str(paper.get('id', '')).startswith('pb:')
@@ -161,12 +275,12 @@ class PaperBridge:
 
     def fetch(self, paper_id: str) -> dict:
         if paper_id.startswith("pb:"):
-            return self.store.fetch(paper_id)
+            return self._text_delivery(self.store.fetch(paper_id), "authorized_archive")
         if not paper_id.startswith("doi:"):
             raise ValueError("Use an identifier returned by search.")
         cached = self.store.first_chunk_for_url(doi_url(normalize_doi(paper_id)))
         if cached:
-            return self.store.fetch(cached)
+            return self._text_delivery(self.store.fetch(cached), "authorized_archive")
         if self.providers:
             return self.get_text(paper_id)
         paper = self.discovery.lookup(normalize_doi(paper_id))
@@ -186,11 +300,11 @@ class PaperBridge:
     def get_text(self, reference: str) -> dict:
         """Read by raw DOI, DOI URL, search ID or continuation ID; never fake full text."""
         if reference.startswith("pb:"):
-            return self.store.fetch(reference)
+            return self._text_delivery(self.store.fetch(reference), "authorized_archive")
         doi = normalize_doi(reference)
         cached = self.store.first_chunk_for_url(doi_url(doi))
         if cached:
-            return self.store.fetch(cached)
+            return self._text_delivery(self.store.fetch(cached), "authorized_archive")
         if self.providers:
             from .browser import RetrievalUnavailable
             paper = None
@@ -218,7 +332,7 @@ class PaperBridge:
                     # A different publisher's policy never authorizes this source.
                     selected.rights(doi)
                     attempted_provider = selected.name
-                    return selected.retrieve(paper)
+                    return self._text_delivery(selected.retrieve(paper), "performed_provider_retrieval")
                 reason = "publisher_not_supported"
             except RetrievalUnavailable as exc:
                 reason = exc.reason
@@ -329,10 +443,17 @@ class PaperBridge:
                       else ["ieee"] if config["enabled"] else [])
         if config["managed"] and openathens_configured():
             configured += sorted(OPENATHENS_PUBLISHERS)
-        return {"version": "0.1.0.dev19", "deployment": "single_user_prototype",
+        return {"version": "0.1.0.dev20", "deployment": "single_user_prototype",
                 "execution": "importing_process", "llm_api_calls": False,
-                "ready": ["crossref_metadata", "local_pdf_text_ingest", "permission_gated_chunk_fetch", "pdf_page_images", "bounded_page_batches"],
-                "optional": ["unpaywall_discovery_with_contact_email"],
+                "ready": ["crossref_metadata", "openalex_metadata", "combined_doi_discovery",
+                          "research_resource_directory", "local_pdf_text_ingest",
+                          "permission_gated_chunk_fetch", "pdf_page_images", "bounded_page_batches"],
+                "optional": ["unpaywall_discovery_with_contact_email", "subscription_literature_discovery"],
+                "research_discovery": {"sources": ["crossref", "openalex"],
+                                       "directory": "official_itu_library",
+                                       "subscription_search_enabled": os.getenv("PAPERBRIDGE_LIBRARY_SEARCH") == "1",
+                                       "subscription_access_verified": False,
+                                       "discovery_reads_full_text": False},
                 "experimental": ["ieee_browser_session_retrieval", "springer_browser_session_retrieval",
                                  "openathens_browser_session_retrieval", "operator_browser_login",
                                  "itu_yetkim_credential_login", "chatgpt_page_file_attachment", "chatgpt_automatic_page_followup"],

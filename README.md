@@ -142,7 +142,9 @@ LLM API key.**
 
 | Source | Support |
 | --- | --- |
-| Crossref | Search for article titles, authors, DOIs and bibliographic metadata |
+| Crossref and OpenAlex | Combined DOI discovery with year/type filters, citation counts, abstracts where supplied, and explicit status for each source |
+| ITU research directory | Find official databases by subject and their institutional entry links, without claiming article access |
+| ProQuest discovery | Optional institutional browser search for titles, authors, dates and snippets from one results page, with a persistent request budget |
 | Unpaywall | Open-access link discovery once you configure your own contact email |
 | IEEE Xplore | Experimental full-text retrieval through a configured browser, with your own institutional access and a permission record |
 | Springer Nature Link | Experimental article and book chapter retrieval under the same conditions |
@@ -155,6 +157,11 @@ trying to get around the check.
 Finding the metadata of an article does not mean reading the full article. For
 new sources that have an open-access link, use regular web access. PaperBridge
 does not start an institutional login or a new PDF download for such sources.
+
+I can also ask ChatGPT to inspect selected PDF pages together. The viewer sends
+the actual images in one continuation, keeping their source and page order.
+Metadata searches use bounded result windows; date and citation ordering do not
+claim complete coverage of a topic.
 
 PaperBridge ships with the package, and its research tools are available by
 default. The publisher browser and institutional login stay off until you

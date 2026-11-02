@@ -116,6 +116,15 @@ class PageViewerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             page_view_result({}, automatic='true')
 
+    def test_manual_instructions_require_continue_after_add(self):
+        result = page_view_result({'image_bytes': b'\x89PNG\r\n\x1a\n'})
+        instructions = result.structuredContent['next_action']
+        self.assertLess(instructions.index('Add page to chat'), instructions.index('Continue with this page'))
+        self.assertIn('Continue sends the selected image block with the message', instructions)
+        self.assertIn('Add alone does not send that message', instructions)
+        self.assertIn('Actual visual access still depends on the client', instructions)
+        self.assertNotIn('then ask about that page in a new message', instructions)
+
     def run_automatic_browser(self, scenario):
         from playwright.sync_api import sync_playwright
         import paperbridge.page_viewer as module
@@ -319,3 +328,5 @@ class PageViewerTests(unittest.TestCase):
                 result = page_view_result({'image_bytes': b'\x89PNG\r\n\x1a\n'}, **options)
                 self.assertEqual(result.structuredContent['continuation_transport'], expected)
                 self.assertEqual(result.structuredContent['continuation_acknowledgement'], 'not_checked')
+                self.assertEqual(result.structuredContent['attachment_method'],
+                    'mcp_apps_image_content' if expected == 'mcp_apps' else 'chatgpt_widget_file')

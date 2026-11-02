@@ -12,6 +12,13 @@ from paperbridge_tests.test_page_batch import fixture, PNG
 
 
 class DeferredBatchResultTests(unittest.TestCase):
+    def test_manual_batch_instructions_require_continue_after_add(self):
+        result = viewer.pages_view_result(dict(pages=[fixture(1), fixture(2)], requested_count=2))
+        instructions = result.structuredContent['next_action']
+        self.assertIn('Add pages to chat, then Continue with these pages once', instructions)
+        self.assertIn('Continue sends the selected image blocks with the message', instructions)
+        self.assertIn('Add alone does not send that message', instructions)
+
     def test_initial_response_has_no_image_bytes_and_retains_exact_order_and_edge(self):
         pages = [dict(fixture(2), page=4), dict(fixture(1), page=2)]
         with patch.dict(os.environ, PAPERBRIDGE_WIDGET_LOSSLESS_WEBP="0"):
@@ -108,7 +115,7 @@ class WidgetPageFetchTests(unittest.TestCase):
             const message = event.data;
             const reply = result => child.postMessage({jsonrpc:'2.0', id:message.id, result}, '*');
             if (message.method === 'ui/initialize') reply({protocolVersion:'2026-01-26',
-              hostInfo:{name:'synthetic',version:'1'},hostCapabilities:{message:{text:{}}}});
+              hostInfo:{name:'synthetic',version:'1'},hostCapabilities:{message:{text:{},image:{}}}});
             if (message.method === 'ui/message') { window.messages.push(message); reply({}); }
           });
         }""")
@@ -189,6 +196,83 @@ class WidgetPageFetchTests(unittest.TestCase):
                 self.assertEqual(frame.evaluate("window.reads.length"), 2)
                 self.assertEqual(frame.evaluate("window.uploads.length"), 0)
                 self.assertEqual(page.evaluate("window.messages.length"), 0)
+
+    def test_manual_continuation_after_remount_reloads_pixels_without_uploading_again(self):
+        page, frame = self.widget()
+        page.wait_for_function("window.messages.length === 1")
+        first = page.evaluate("window.messages[0].params.content")
+        self.assertEqual(first[1:], [dict(type="image", mimeType="image/png",
+            data=base64.b64encode(PNG).decode())] * 2)
+        self.assertIn("1. https://example.org/paper/2; PDF page 4.", first[0]["text"])
+        self.assertIn("2. https://example.org/paper/1; PDF page 2.", first[0]["text"])
+        uploads = frame.evaluate("window.uploads")
+        frame.evaluate("window.dispatchEvent(new Event('pagehide'))")
+        frame.set_content(self.html)
+        frame.get_by_role("button", name="Pages uploaded").wait_for()
+        self.assertEqual(frame.evaluate("window.reads.length"), 2)
+        self.assertEqual(page.evaluate("window.messages.length"), 1)
+        frame.get_by_role("button", name="Continue with these pages").click()
+        page.wait_for_function("window.messages.length === 2")
+        self.assertEqual(page.evaluate("window.messages[1].params.content"), first)
+        self.assertEqual(frame.evaluate("window.reads.map(item => item.args.page)"), [4, 2, 4, 2])
+        self.assertEqual(frame.evaluate("window.uploads"), uploads)
+        frame.evaluate("document.getElementById('continue').dispatchEvent(new Event('click')); "
+                       "window.dispatchEvent(new Event('pagehide'))")
+        frame.set_content(self.html)
+        frame.get_by_role("button", name="Pages uploaded").wait_for()
+        self.assertTrue(frame.get_by_role("button", name="Continue with these pages").is_disabled())
+        self.assertEqual(page.evaluate("window.messages.length"), 2)
+        self.assertEqual(frame.evaluate("window.reads.length"), 4)
+
+    def test_revoked_permission_on_remount_refuses_image_message_without_reupload(self):
+        page, frame = self.widget()
+        page.wait_for_function("window.messages.length === 1")
+        frame.evaluate("""() => {
+          const read = window.openai.callTool;
+          window.openai.callTool = async (name,args) => {
+            await read(name,args);
+            return {content:[{type:'text',text:JSON.stringify({status:'external_model_permission_required'})}]};
+          };
+          window.dispatchEvent(new Event('pagehide'));
+        }""")
+        frame.set_content(self.html)
+        frame.get_by_role("button", name="Pages uploaded").wait_for()
+        frame.get_by_role("button", name="Continue with these pages").click()
+        frame.wait_for_function("document.getElementById('continuation-result').textContent.includes("
+                                "'After-button: Selected image bytes could not be validated or loaded')")
+        self.assertEqual(page.evaluate("window.messages.length"), 1)
+        self.assertEqual(frame.evaluate("window.uploads.length"), 2)
+        self.assertEqual(frame.evaluate("window.reads.length"), 3)
+        frame.evaluate("window.dispatchEvent(new Event('openai:set_globals')); window.dispatchEvent(new Event('pagehide'))")
+        frame.set_content(self.html)
+        frame.get_by_role("button", name="Pages uploaded").wait_for()
+        self.assertTrue(frame.get_by_role("button", name="Continue with these pages").is_disabled())
+        self.assertEqual(page.evaluate("window.messages.length"), 1)
+        self.assertEqual(frame.evaluate("window.reads.length"), 3)
+
+    def test_teardown_during_manual_pixel_reload_prevents_late_image_message(self):
+        page, frame = self.widget()
+        page.wait_for_function("window.messages.length === 1")
+        frame.evaluate("""() => {
+          const read = window.openai.callTool;
+          window.openai.callTool = async (name,args) => {
+            const result = await read(name,args);
+            await new Promise(resolve => { window.releaseContinuationRead = resolve; });
+            return result;
+          };
+          window.dispatchEvent(new Event('pagehide'));
+        }""")
+        frame.set_content(self.html)
+        frame.get_by_role("button", name="Pages uploaded").wait_for()
+        frame.get_by_role("button", name="Continue with these pages").click()
+        frame.wait_for_function("typeof window.releaseContinuationRead === 'function'")
+        frame.evaluate("window.dispatchEvent(new Event('pagehide')); window.releaseContinuationRead()")
+        frame.set_content(self.html)
+        frame.get_by_role("button", name="Pages uploaded").wait_for()
+        self.assertEqual(page.evaluate("window.messages.length"), 1)
+        self.assertEqual(frame.evaluate("window.uploads.length"), 2)
+        self.assertEqual(frame.evaluate("window.reads.length"), 3)
+        self.assertTrue(frame.get_by_role("button", name="Continue with these pages").is_disabled())
 
     def test_manual_retry_reuses_successful_fetch_and_does_not_start_a_followup(self):
         page, frame = self.widget("reject")

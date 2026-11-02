@@ -23,6 +23,7 @@ from urllib.parse import quote, urlsplit
 
 from .browser import RetrievalUnavailable
 from .identifiers import doi_url, normalize_doi
+from .network import publisher_proxy
 from .pdf_identity import verify_pdf_identity
 from .permissions import read_rights
 from .publishers import identify_platform
@@ -89,6 +90,22 @@ def openathens_configured() -> bool:
         return True
     except RetrievalUnavailable:
         return False
+
+
+def use_publisher_proxy() -> bool:
+    """Opt in only after the operator has extended the local CONNECT allowlist."""
+    enabled = os.environ.get("PAPERBRIDGE_OPENATHENS_PUBLISHER_PROXY", "0")
+    if enabled not in {"0", "1"}:
+        raise RetrievalUnavailable("openathens_proxy_configuration_invalid")
+    if enabled == "0":
+        return False
+    try:
+        proxy = publisher_proxy()
+    except ValueError:
+        raise RetrievalUnavailable("openathens_proxy_configuration_invalid") from None
+    if not proxy:
+        raise RetrievalUnavailable("openathens_proxy_unavailable")
+    return True
 
 
 def _clean(url: str) -> bool:
@@ -300,9 +317,8 @@ class OpenAthensProvider:
         rights = self.rights(paper["doi"])
         try:
             with FileLock(str(self.store.root / ".browser.lock"), timeout=0):
-                # The IEEE-only publisher proxy does not serve these hosts.
                 data = self.runner.run(lambda context: self._read(context, paper, PUBLISHERS[name]),
-                                       use_publisher_proxy=False)
+                                       use_publisher_proxy=use_publisher_proxy())
                 identity = verify_pdf_identity(data, paper)
                 with tempfile.TemporaryDirectory(dir=self.store.root) as directory:
                     path = Path(directory) / "article.pdf"

@@ -2,12 +2,17 @@
 from __future__ import annotations
 
 import os
+from pydantic import StrictBool
 
 from .cli import default_data_dir
 from .discovery import MetadataClient
 from .institutions import ItuProfile
 from .service import PaperBridge
 from .storage import DocumentStore
+from .research_schema import (
+    DiscoverySource, LibraryQuery, ResearchKind, ResearchLimit, ResearchOrder,
+    ResearchYear, ResourceLimit, ResourceQuery, ResourceSubject, SearchQuery,
+)
 
 
 def page_tool_result(result: dict):
@@ -66,6 +71,38 @@ def register_tools(mcp, bridge: PaperBridge):
         Do not claim to have read full text when content_level is metadata_only.
         """
         return bridge.fetch(id)
+
+    @mcp.tool(annotations=annotations)
+    def papers_search(query: SearchQuery, limit: ResearchLimit = 10, local_only: StrictBool = False,
+                      year_from: ResearchYear | None = None, year_to: ResearchYear | None = None,
+                      order: ResearchOrder = "relevance", kind: ResearchKind | None = None,
+                      discovery: DiscoverySource = "crossref") -> dict:
+        """Discover DOI records and authorized archive text with explicit source coverage."""
+        return bridge.search(query, limit, local_only=local_only, year_from=year_from,
+                             year_to=year_to, order=order, kind=kind, discovery=discovery)
+
+    @mcp.tool(annotations=annotations)
+    def papers_resources(query: ResourceQuery = "", subject: ResourceSubject | None = None,
+                         limit: ResourceLimit = 10) -> dict:
+        """Find official research-resource entry links without checking article entitlement."""
+        from .research_resources import ResearchResourcesError
+        try:
+            return bridge.resources(query, subject, limit)
+        except ResearchResourcesError as exc:
+            return {"status": "research_directory_unavailable", "reason": exc.code,
+                    "full_text_read": False, "entitlement": "not_checked"}
+
+    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False,
+                                         idempotentHint=False, openWorldHint=True))
+    def papers_library_query(query: LibraryQuery, year_from: ResearchYear | None = None,
+                             year_to: ResearchYear | None = None, reviewed_only: StrictBool = False,
+                             limit: ResearchLimit = 10) -> dict:
+        """Search operator-enabled subscription records; snippets are not full-text reading."""
+        from .browser import RetrievalUnavailable
+        try:
+            return bridge.library_query(query, year_from, year_to, reviewed_only, limit)
+        except RetrievalUnavailable as exc:
+            return {"status": "access_unavailable", "reason": exc.reason, "full_text_read": False}
 
     @mcp.tool(annotations=annotations)
     def papers_resolve(doi: str) -> dict:

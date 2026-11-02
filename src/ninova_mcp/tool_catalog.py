@@ -98,7 +98,7 @@ DOMAINS: dict[str, tuple[str, tuple[str, ...]]] = {
     ),
     "papers": (
         "PaperBridge research papers: search, resolve, full text and page views through institutional access",
-        ("papers_search", "papers_resolve", "papers_get_text", "papers_get_page",
+        ("papers_search", "papers_resources", "papers_library_query", "papers_resolve", "papers_get_text", "papers_get_page",
          "papers_status", "search", "fetch", "papers_view_page", "papers_view_pages",
          "papers_visual_probe"),
     ),
@@ -240,6 +240,8 @@ KEYWORDS: dict[str, str] = {
     "mail_send_message": "maili gönder e-posta gönder onayla email send",
     "mail_save_draft": "taslağa kaydet taslaklar taslak olarak kaydet göndermeden kaydet webmail",
     "papers_search": "makale ara akademik yayın literatür article paper",
+    "papers_resources": "research resources databases institutional entry subjects",
+    "papers_library_query": "subscription literature discovery journal dissertation scholarly records",
     "papers_resolve": "doi makale bul",
     "papers_get_text": "makale tam metin oku",
     "papers_get_page": "makale sayfası",

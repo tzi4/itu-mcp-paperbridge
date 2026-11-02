@@ -16,12 +16,14 @@ class StandardBridgeTests(unittest.TestCase):
             'delivery_error': 'rpc_delivery_error', 'timeout': 'rpc_timeout',
             'invalid': 'rpc_invalid', 'init_timeout': 'rpc_unavailable',
             'init_rejected': 'rpc_unavailable', 'unsupported': 'rpc_unsupported',
-            'unadvertised': 'rpc_accepted', 'spoof': 'rpc_timeout',
+            'unadvertised': 'rpc_unsupported', 'spoof': 'rpc_timeout',
             'late': 'rpc_timeout',
-            'empty_marker': 'rpc_accepted', 'legacy_flag': 'rpc_accepted',
-            'legacy_text_flag': 'rpc_accepted', 'disabled': 'rpc_unsupported',
+            'empty_marker': 'rpc_unsupported', 'legacy_flag': 'rpc_unsupported',
+            'legacy_text_flag': 'rpc_unsupported', 'disabled': 'rpc_unsupported',
             'disabled_text': 'rpc_unsupported', 'malformed': 'rpc_invalid_capability',
             'unknown_fields': 'rpc_invalid_capability',
+            'text_only': 'rpc_image_unsupported', 'disabled_image': 'rpc_image_unsupported',
+            'legacy_image_flag': 'rpc_image_unsupported', 'invalid_image': 'rpc_invalid_capability',
         }
         with sync_playwright() as driver:
             browser = driver.firefox.launch(headless=True)
@@ -54,7 +56,7 @@ class StandardBridgeTests(unittest.TestCase):
                   if (scenario === 'init_timeout') return;
                   if (scenario === 'init_rejected') { reply({error:{code:-32601, message:'PRIVATE_SENTINEL'}}); return; }
                   const capabilities = scenario === 'unadvertised' ? {} :
-                    {message: scenario === 'unsupported' ? {image:{}} : {text:{}}};
+                    {message: scenario === 'unsupported' ? {image:{}} : {text:{},image:{}}};
                   if (scenario === 'empty_marker') capabilities.message = {};
                   if (scenario === 'legacy_flag') capabilities.message = true;
                   if (scenario === 'legacy_text_flag') capabilities.message = {text:true};
@@ -62,6 +64,10 @@ class StandardBridgeTests(unittest.TestCase):
                   if (scenario === 'disabled_text') capabilities.message = {text:false};
                   if (scenario === 'malformed') capabilities.message = null;
                   if (scenario === 'unknown_fields') capabilities.message = {PRIVATE_SENTINEL:'PRIVATE_SENTINEL'};
+                  if (scenario === 'text_only') capabilities.message = {text:{}};
+                  if (scenario === 'disabled_image') capabilities.message.image = false;
+                  if (scenario === 'legacy_image_flag') capabilities.message.image = true;
+                  if (scenario === 'invalid_image') capabilities.message.image = [];
                   reply({result:{protocolVersion:'2026-01-26', hostInfo:{name:'fixture',version:'1'},
                                  hostCapabilities:capabilities}});
                 } else if (request.method === 'ui/notifications/initialized') {
@@ -106,13 +112,14 @@ class StandardBridgeTests(unittest.TestCase):
                 'rpc_invalid': 'Invalid host acknowledgement',
                 'rpc_unavailable': 'Standard bridge unavailable',
                 'rpc_unsupported': 'Host does not advertise text message support',
+                'rpc_image_unsupported': 'Host does not advertise image message support',
                 'rpc_invalid_capability': 'Unrecognized message capability format',
             }
             expected_text = 'Automatic: ' + labels[expected]
             frame.wait_for_function('text => document.getElementById("continuation-result").textContent.includes(text)', arg=expected_text)
             self.assertEqual(frame.evaluate('window.uploads'), 1)
             self.assertEqual(frame.evaluate('window.compatibilityCalls'), 0)
-            count = 0 if expected in ('rpc_unavailable', 'rpc_unsupported', 'rpc_invalid_capability') else 1
+            count = 0 if expected in ('rpc_unavailable', 'rpc_unsupported', 'rpc_image_unsupported', 'rpc_invalid_capability') else 1
             self.assertEqual(page.evaluate('window.messages.length'), count)
             self.assertNotIn('PRIVATE_SENTINEL', frame.locator('body').text_content())
             self.assertIn('Capability shape:', frame.locator('#continuation-result').text_content())
@@ -126,6 +133,11 @@ class StandardBridgeTests(unittest.TestCase):
                 self.assertEqual(params['role'], 'user')
                 self.assertEqual(params['content'][0]['type'], 'text')
                 self.assertIn('Do not call papers_view_page again', params['content'][0]['text'])
+                self.assertIn('1. https://example.org/fixture; PDF page 1.', params['content'][0]['text'])
+                self.assertEqual(params['content'][1:], [dict(type='image', mimeType='image/png',
+                    data=base64.b64encode(png).decode())])
+                self.assertNotIn(base64.b64encode(png).decode(), params['content'][0]['text'])
+                self.assertNotIn(base64.b64encode(png).decode(), str(frame.evaluate('window.openai.widgetState')))
             if scenario == 'rejected':
                 self.assertIn('Automatic error code: -32000.', frame.locator('#continuation-result').text_content())
             if scenario == 'accepted':
@@ -134,6 +146,7 @@ class StandardBridgeTests(unittest.TestCase):
                 frame.wait_for_function('document.getElementById("continuation-result").textContent.includes("After-button: Host acknowledged ui/message")')
                 count += 1
                 frame.evaluate('document.getElementById("continue").dispatchEvent(new Event("click"))')
+                self.assertEqual(page.evaluate('window.messages[1].params.content'), params['content'])
             if scenario == 'late':
                 page.wait_for_timeout(400)
                 self.assertIn(expected_text, frame.locator('#continuation-result').text_content())

@@ -12,9 +12,15 @@ PAPER_INSTRUCTIONS = (
     "public_access_available, open its public link directly and do not repeat the request through "
     "PaperBridge. That response contains no paper text or figures. Metadata discovery, an open PDF or a "
     "successful download alone never proves that institutional access was required or used. "
-    "For scholarly papers and reading lists, use papers_search. To find previously saved papers "
+    "For scholarly papers and reading lists, use papers_search with discovery=combined for broader discovery. "
+    "Use its year, publication-kind and ordering options when relevant. Use papers_resources to find "
+    "official institutional research databases and their entry links. A directory listing is not verified article access. "
+    "Use papers_library_query for operator-enabled subscription discovery; its snippets are not full-text reading. "
+    "To find previously saved papers "
     "without external discovery, use papers_search with local_only=true. Repeated DOI reads "
-    "use the authorized local archive before attempting a new download. If web search finds a DOI "
+    "use the authorized local archive before attempting a new download. Text metadata.delivery describes "
+    "the current call's archive or provider path; an unknown network_retrieval is not proof of a download. "
+    "If web search finds a DOI "
     "behind a paywall, try papers_get_text with that DOI before concluding that this "
     "connector cannot provide the text. Use papers_resolve for open-access or institutional "
     "entry links. Search access fields distinguish an authorized archive entry from a configured adapter "
@@ -65,8 +71,32 @@ PAPER_TOOLS = [
           "The access field reports archive/adapter availability without asserting entitlement. "
           "Search results are not proof that full text was read. Use papers_get_text with first_chunk_id "
           "to read a local paper from its beginning, then follow next_id to null.",
-          {"query": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 20, "default": 10},
-           "local_only": {"type": "boolean", "default": False}}, ("query",)),
+          {"query": {"type": "string", "minLength": 1, "maxLength": 1000}, "limit": {"type": "integer", "minimum": 1, "maximum": 20, "default": 10},
+           "local_only": {"type": "boolean", "default": False},
+           "year_from": {"type": "integer", "minimum": 1000, "maximum": 2100},
+           "year_to": {"type": "integer", "minimum": 1000, "maximum": 2100},
+           "order": {"type": "string", "enum": ["relevance", "recent", "citations"], "default": "relevance"},
+           "kind": {"type": "string", "enum": ["article", "review", "book-chapter", "dissertation", "preprint"]},
+           "discovery": {"type": "string", "enum": ["crossref", "openalex", "combined"], "default": "crossref",
+                         "description": "Use combined for complementary discovery sources with per-source status."}}, ("query",)),
+    _tool("papers_resources", "Find Research Resources",
+          "Find official ITU research databases by subject or topic and return their institutional entry links. "
+          "No login or document retrieval is performed. A listed database does not prove subscription entitlement "
+          "for an individual article or that any paper text has been read.",
+          {"query": {"type": "string", "maxLength": 500, "default": ""},
+           "subject": {"type": "string", "minLength": 1, "maxLength": 256},
+           "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 10}}),
+    _tool("papers_library_query", "Explore Subscription Literature",
+          "Find scholarly records through the operator-enabled institutional browser session. "
+          "Requires PAPERBRIDGE_LIBRARY_SEARCH=1 on the host and the configured library account. "
+          "Returns metadata and excerpts only, with explicit source and access status. "
+          "A PDF link or excerpt does not mean full text was downloaded or read. "
+          "No credentials, login URLs, paths or permissions are accepted from the assistant.",
+          {"query": {"type": "string", "minLength": 2, "maxLength": 500},
+           "year_from": {"type": "integer", "minimum": 1000, "maximum": 2100},
+           "year_to": {"type": "integer", "minimum": 1000, "maximum": 2100},
+           "reviewed_only": {"type": "boolean", "default": False},
+           "limit": {"type": "integer", "minimum": 1, "maximum": 20, "default": 10}}, ("query",)),
     _tool("papers_resolve", "Resolve Paper Access",
           "Look up a DOI found on the web or in search and discover OA or ITU platform entry links. "
           "Does not log in, download a paper, or verify institutional entitlement.",
@@ -120,8 +150,8 @@ PAPER_TOOLS.append(_tool("papers_view_page", "Preview and Attach Paper Page",
         "description": "Default mcp_apps uses ui/message. Select compatibility explicitly for the legacy continuation path. Host acknowledgement does not prove model continuation."}},
     ("reference", "page")))
 PAPER_TOOLS[-1]["_meta"] = {
-    "ui": {"resourceUri": "ui://paperbridge/page-viewer-v12.html"},
-    "openai/outputTemplate": "ui://paperbridge/page-viewer-v12.html"}
+    "ui": {"resourceUri": "ui://paperbridge/page-viewer-v13.html"},
+    "openai/outputTemplate": "ui://paperbridge/page-viewer-v13.html"}
 
 PAPER_TOOLS.append(_tool("papers_view_pages", "Attach Selected Paper Pages",
     "Prepare selected authorized PDF pages from one or more papers in one preview, with no fixed page-count limit. "
@@ -144,8 +174,8 @@ PAPER_TOOLS.append(_tool("papers_view_pages", "Attach Selected Paper Pages",
      "continuation_delay_seconds": {"type": "integer", "minimum": 0, "maximum": 60, "default": 0}},
     ("pages",)))
 PAPER_TOOLS[-1]["_meta"] = {
-    "ui": {"resourceUri": "ui://paperbridge/page-viewer-v12.html"},
-    "openai/outputTemplate": "ui://paperbridge/page-viewer-v12.html"}
+    "ui": {"resourceUri": "ui://paperbridge/page-viewer-v13.html"},
+    "openai/outputTemplate": "ui://paperbridge/page-viewer-v13.html"}
 
 # The synthetic experiment is disabled unless the operator explicitly enables it.
 PAPER_TOOLS.append(_tool("papers_visual_probe", "Test Image Attachment",
@@ -172,10 +202,19 @@ class PapersClient:
 
     def call(self, method: str, *args: Any, **kwargs: Any) -> dict[str, Any]:
         from paperbridge.discovery import DiscoveryError
+        from paperbridge.browser import RetrievalUnavailable
+        from paperbridge.research_resources import ResearchResourcesError
         from paperbridge.rendering import PageRenderUnavailable
 
         try:
             result = getattr(self.bridge, method)(*args, **kwargs)
+        except ResearchResourcesError as exc:
+            result = {"status": "research_directory_unavailable", "reason": exc.code,
+                      "full_text_read": False, "entitlement": "not_checked"}
+        except RetrievalUnavailable as exc:
+            result = {"status": "access_unavailable", "reason": exc.reason,
+                      "full_text_read": False,
+                      "message": "The requested institutional discovery route is unavailable; no full text was read."}
         except PermissionError:
             result = {"status": "external_model_permission_required", "text": None,
                       "full_text_read": False,

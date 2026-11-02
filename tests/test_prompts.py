@@ -104,7 +104,7 @@ class PromptRenderTests(unittest.TestCase):
 class ResourceTests(unittest.TestCase):
     def test_list_resources_matches_metadata(self) -> None:
         resources = asyncio.run(_server().list_resources())
-        expected = set(RESOURCE_URIS) | {"ui://paperbridge/page-viewer-v12.html"}
+        expected = set(RESOURCE_URIS) | {"ui://paperbridge/page-viewer-v13.html"}
         self.assertEqual({str(r.uri) for r in resources}, expected)
 
     def test_resources_are_concrete_not_templates(self) -> None:
