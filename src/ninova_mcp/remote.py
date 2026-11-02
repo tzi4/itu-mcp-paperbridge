@@ -90,6 +90,9 @@ def _selected_remote_tool_names() -> list[str]:
         eligible.update(MAIL_DRAFT_TOOL_NAMES)
     if writes_enabled and help_ticket_writes_enabled():
         eligible.update(HELP_TICKET_WRITE_TOOL_NAMES)
+    if writes_enabled and os.getenv("NINOVA_COURSEHUB_WRITES", "0") == "1":
+        from .course_hub_tools import COURSEHUB_WRITE_TOOLS
+        eligible.update(COURSEHUB_WRITE_TOOLS)
     if writes_enabled and message_board_writes_enabled():
         eligible.update(MESSAGE_BOARD_WRITE_TOOL_NAMES)
     available = [

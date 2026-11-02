@@ -284,7 +284,7 @@ class RemoteFilesTests(unittest.TestCase):
         with patch.dict(os.environ, {
             "NINOVA_REMOTE_ENABLE_FILES": "1", "NINOVA_REMOTE_ENABLE_WRITES": "1",
             "NINOVA_REMOTE_ENABLE_MAIL": "1", "NINOVA_REMOTE_ALLOWED_TOOLS": "",
-            "NINOVA_OBS_REGISTRATION_WRITES": "1",
+            "NINOVA_OBS_REGISTRATION_WRITES": "1", "NINOVA_COURSEHUB_WRITES": "1",
         }):
             server = _build_fastmcp(self.app, "/mcp")
             tools = {tool.name: tool for tool in asyncio.run(server.list_tools())}
